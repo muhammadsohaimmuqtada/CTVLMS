@@ -108,6 +108,10 @@ const chartColors = {
 const defaultChartOptions = {
     responsive: true,
     maintainAspectRatio: false,
+    animation: {
+        duration: 2500,
+        easing: 'easeOutElastic'
+    },
     plugins: {
         legend: {
             labels: {

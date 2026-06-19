@@ -437,6 +437,7 @@ textarea.form-control {
 
 .chart-container canvas {
     max-height: 300px;
+    animation: liveChartGlow 4s ease-in-out infinite;
 }
 
 /* ---- Reports ---- */
@@ -521,6 +522,11 @@ textarea.form-control {
 @keyframes pulse-glow {
     0%, 100% { filter: drop-shadow(0 0 8px rgba(0, 245, 212, 0.4)); }
     50%      { filter: drop-shadow(0 0 16px rgba(0, 245, 212, 0.7)); }
+}
+
+@keyframes liveChartGlow {
+    0%, 100% { filter: drop-shadow(0 0 2px rgba(0, 245, 212, 0.05)); }
+    50%      { filter: drop-shadow(0 0 15px rgba(0, 245, 212, 0.25)); }
 }
 
 @keyframes fadeInUp {
