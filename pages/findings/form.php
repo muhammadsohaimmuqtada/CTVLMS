@@ -194,7 +194,7 @@ require __DIR__ . '/../../includes/header.php';
                     <?php foreach ($vulnerabilities as $v): ?>
                     <option value="<?= (int)$v['vulnID'] ?>"
                         <?= ((int)($record['vulnID'] ?? 0)) === (int)$v['vulnID'] ? 'selected' : '' ?>>
-                        <?= e($v['cveID']) ?> — <?= e(mb_substr($v['title'], 0, 60)) ?>
+                        <?= e($v['cveID']) ?> — <?= e(substr($v['title'], 0, 60)) ?>
                     </option>
                     <?php endforeach; ?>
                 </select>

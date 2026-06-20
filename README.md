@@ -1,167 +1,114 @@
-# CTVLMS — Cyber Threat & Vulnerability Lifecycle Management System
+# 🛡️ CTVLMS — Cyber Threat & Vulnerability Lifecycle Management System
 
-A full-stack web application for tracking cybersecurity threats, vulnerabilities,
-assets, incidents, red team engagements, and remediations — with role-based access
-control, audit logging, a real-time dashboard, and a comprehensive reports engine.
+![PHP](https://img.shields.io/badge/PHP-8.0+-777BB4?style=for-the-badge&logo=php&logoColor=white)
+![MariaDB](https://img.shields.io/badge/MariaDB-10.5+-003545?style=for-the-badge&logo=mariadb&logoColor=white)
+![Bootstrap](https://img.shields.io/badge/Bootstrap-5.3-7952B3?style=for-the-badge&logo=bootstrap&logoColor=white)
+![Security](https://img.shields.io/badge/Security-Hardened-2ea44f?style=for-the-badge)
+
+A full-stack enterprise web application designed to track cybersecurity threats, vulnerabilities, assets, incidents, red team engagements, and remediations. Built with a robust **Role-Based Access Control (RBAC)** architecture, strict audit logging, a real-time dashboard, and a comprehensive database reports engine.
 
 > **Course**: Database Systems  
 > **Stack**: PHP 8+ · MySQL/MariaDB · Bootstrap 5 · Chart.js
 
 ---
 
-## Features
+## ✨ Core Features
 
-- **12-table normalized schema** with proper foreign keys, CHECK constraints, and indexes
-- **Full CRUD** on all entities (Assets, Vulnerabilities, Threat Actors, IOCs, Incidents, Engagements, Findings, Remediations)
-- **Vulnerability Lifecycle Board** — track status from Discovered → Triaged → Confirmed → Remediation → Verified Closed
-- **Role-Based Access Control** — 5 roles (Admin, SOC Analyst, Red Teamer, Vuln Manager, Viewer) with granular permissions
-- **Interactive Dashboard** — 4 Chart.js visualizations + attention feed
-- **Reports Page** — runs all 12 query-bank queries (JOINs, subqueries, aggregation, UNION, views)
-- **Audit Logging** — every CREATE, UPDATE, DELETE, STATUS_CHANGE, LOGIN, LOGOUT is tracked
-- **Security by design** — PDO prepared statements, htmlspecialchars, bcrypt passwords, CSRF tokens, session hardening
+- **12-Table Normalized Schema** — 3NF compliant with proper foreign keys, `CHECK` constraints, and indexes.
+- **Vulnerability Lifecycle Board** — Track the exact state of vulnerabilities per asset (Discovered → Triaged → Confirmed → Remediation → Verified Closed).
+- **Role-Based Access Control** — 5 distinct roles (`Admin`, `SOC Analyst`, `Red Teamer`, `Vuln Manager`, `Viewer`) with granular backend permission enforcement.
+- **Interactive Dashboard** — Dynamic Chart.js visualizations built directly from real-time database queries, plus a live attention feed.
+- **NIST NVD Integration** — Server-side API sync to fetch real-world CVE data from the US Government's National Vulnerability Database.
+- **Audit Logging** — Immutable tracking of every `CREATE`, `UPDATE`, `DELETE`, `STATUS_CHANGE`, `LOGIN`, and `LOGOUT` across the entire platform.
+- **Security by Design** — PDO prepared statements (SQLi protection), `htmlspecialchars` (XSS protection), bcrypt password hashing, CSRF tokens, and strict session hardening.
 
 ---
 
-## Quick Start
+## 🚀 Quick Start & Installation
 
 ### Prerequisites
-
-- PHP 8.0+ with extensions: `pdo_mysql`, `mbstring`, `json`, `session`, `openssl`
+- PHP 8.0+ (with extensions: `pdo_mysql`, `mbstring`, `json`, `session`, `openssl`)
 - MySQL 8.0+ or MariaDB 10.5+
+- Linux/Unix environment (recommended)
 
-### 1. Start the Database
-
+### 1. Unified Launcher (Easiest Way)
+If you are on a Linux environment (like Kali), we have provided a single launcher script that handles the database and servers automatically:
 ```bash
-# If using local MariaDB/MySQL:
-sudo systemctl start mariadb    # or: sudo systemctl start mysql
-
-# Or use Docker:
-docker-compose up -d
+./ctvlms.sh
 ```
+*This will start MariaDB, the Web Portal on port 8000, and the Admin Tools on port 8080.*
 
-### 2. Import Schema & Seed Data
+### 2. Manual Setup
+If you prefer to start the services manually:
 
 ```bash
+# Start the Database
+sudo systemctl start mariadb
+
+# Import Schema & Seed Data
 mysql -u root -p < database/schema.sql
 mysql -u root -p ctvlms < database/seed.sql
-```
 
-### 3. Configure Credentials
-
-```bash
+# Configure Credentials
 cp config/config.example.php config/config.php
-# Edit config/config.php with your database credentials
+# Edit config/config.php with your local database credentials
+
+# Run the Application
+php -S localhost:8000 -t .
 ```
-
-### 4. Run the Application
-
-```bash
-php -S localhost:8000
-```
-
-Open **http://localhost:8000** in your browser.
 
 ---
 
-## Default Login Credentials
+## 🔑 Default Credentials
 
 | Role | Email | Password |
 |------|-------|----------|
-| Admin | admin@ctvlms.local | Admin@123 |
-| SOC Analyst | soc.analyst@ctvlms.local | Admin@123 |
-| Red Teamer | red.teamer@ctvlms.local | Admin@123 |
-| Vuln Manager | vuln.manager@ctvlms.local | Admin@123 |
-| Viewer | viewer@ctvlms.local | Admin@123 |
+| **Admin** | `admin@ctvlms.local` | `Admin@123` |
+| **SOC Analyst** | `soc.analyst@ctvlms.local` | `Admin@123` |
+| **Red Teamer** | `red.teamer@ctvlms.local` | `Admin@123` |
+| **Vuln Manager** | `vuln.manager@ctvlms.local` | `Admin@123` |
+| **Viewer** | `viewer@ctvlms.local` | `Admin@123` |
 
-> ⚠️ Change these passwords after first login in a real deployment.
-
----
-
-## Database Schema (ERD)
-
-The schema consists of 12 tables organized into 4 logical groups:
-
-### Core Assets & Vulnerabilities
-- `users` — System users with role-based access
-- `assets` — IT assets being protected/tested
-- `vulnerabilities` — CVE-linked vulnerability catalog
-- `asset_vulnerabilities` — **Junction table** linking assets to vulns with lifecycle status
-
-### Threat Intelligence
-- `threat_actors` — Known APT groups and threat actors
-- `indicators_of_compromise` — IOCs linked to threat actors
-
-### Incident Response
-- `incidents` — Security incidents linked to assets, actors, and vulnerabilities
-
-### Red Team Operations
-- `engagements` — Pentest/red team engagements
-- `engagement_assets` — **Junction table** for engagement scope
-- `findings` — Red team findings from engagements
-- `remediations` — Fix actions tracked against asset vulnerabilities
-
-### Audit
-- `audit_log` — Complete audit trail of all system actions
+> ⚠️ *These are seed credentials for development and demonstration purposes. Ensure passwords are changed in a production deployment.*
 
 ---
 
-## Query Bank
+## 🗄️ Database Architecture (ERD)
 
-The Reports page demonstrates 12 queries covering:
+We have included a highly professional, interactive, drag-and-drop Entity Relationship Diagram (ERD) visualizer!  
+**Open `schema_viewer.html` in your browser to view the interactive schema.**
 
-1. **INNER JOIN** — Assets with open vulnerabilities
-2. **LEFT JOIN** — All assets with vulnerability counts
-3. **Multi-table JOIN** — Full incident reports
-4. **JOIN + GROUP BY + HAVING** — Critical assets with 3+ unresolved vulns
-5. **Correlated subquery** — Vulns with above-average CVSS
-6. **Subquery with IN** — Assets in active engagements
-7. **Three-way JOIN** — High/critical red team findings
-8. **Aggregation** — Mean time to remediate by criticality
-9. **RIGHT JOIN** — IOCs with attributed actors
-10. **UNION** — Combined attention feed
-11. **View** — Open lifecycle dashboard view
-12. **Self-contained** — Top 5 most attacked assets
+The database consists of **12 tables** organized into 5 logical domains:
+
+1. **Identity & Access** (`users`)
+2. **Assets & Vulnerabilities** (`assets`, `vulnerabilities`, `asset_vulnerabilities`)
+3. **Threat Intelligence** (`threat_actors`, `indicators_of_compromise`)
+4. **Incident Response** (`incidents`)
+5. **Red Team & Remediation** (`engagements`, `engagement_assets`, `findings`, `remediations`)
+6. **System Audit** (`audit_log`)
 
 ---
 
-## Project Structure
+## 📊 Advanced Query Bank
 
-```
-ctvlms/
-├── config/              # Database credentials & connection
-├── database/            # Schema, seed data, query bank
-├── includes/            # Auth, CSRF, audit, helpers, layout
-├── pages/               # All page files (CRUD + dashboard + reports)
-├── public/              # Static assets (CSS, JS)
-├── index.php            # Front controller / router
-├── docker-compose.yml   # Optional Docker setup
-└── README.md
-```
+The backend executes complex SQL operations to build the dashboard and reports. The query bank demonstrates:
+- **Multi-table JOINs** (INNER, LEFT, RIGHT, and 3-way JOINs)
+- **Aggregations & GROUP BY** (Mean time to remediate, Severity distributions)
+- **Correlated Subqueries** (Assets with above-average CVSS scores)
+- **UNION operations** (Combined attention feed of recent incidents and vulns)
 
 ---
 
-## Security Measures
+## 🛡️ Security Posture
 
-| Threat | Mitigation |
+| Threat Vector | Applied Mitigation Strategy |
 |--------|-----------|
-| SQL Injection | PDO prepared statements with bound parameters everywhere |
-| XSS | All output escaped with `htmlspecialchars()` via `e()` helper |
-| CSRF | Token on every POST form, validated server-side |
-| Password Storage | `password_hash()` with bcrypt, verified with `password_verify()` |
-| Session Fixation | `session_regenerate_id(true)` on login |
-| Session Hijacking | HttpOnly, SameSite=Strict, strict mode cookies |
-| Credential Exposure | `config.php` gitignored, example template committed |
+| **SQL Injection (SQLi)** | 100% PDO prepared statements with strongly bound parameters. |
+| **Cross-Site Scripting (XSS)** | All user-supplied output is strictly escaped with `htmlspecialchars()` via a global `e()` helper. |
+| **Cross-Site Request Forgery (CSRF)** | Cryptographically secure tokens generated on session creation and validated on every POST endpoint. |
+| **Broken Authentication** | Passwords hashed using `bcrypt`. Verification via `password_verify()`. |
+| **Session Hijacking** | Enforced `HttpOnly`, `SameSite=Strict`, and strict mode cookies. `session_regenerate_id(true)` applied on login/logout. |
 
 ---
 
-## Tech Stack
-
-| Component | Technology |
-|-----------|-----------|
-| Backend | PHP 8.4 (procedural with PDO) |
-| Database | MariaDB 11.8 / MySQL 8.0+ |
-| Frontend | Bootstrap 5.3 (CDN) |
-| Charts | Chart.js 4.x (CDN) |
-| Icons | Bootstrap Icons (CDN) |
-| Fonts | Inter, JetBrains Mono (Google Fonts) |
-| Server | PHP built-in development server |
+*Developed for Academic/Viva Purposes. Do not expose to the internet without proper firewall and TLS configuration.*

@@ -148,7 +148,7 @@ require __DIR__ . '/../../includes/header.php';
                         <small class="text-muted font-mono">
                             <?= e($row['cveID'] ?? '') ?>
                             <?php if (!empty($row['vulnTitle'])): ?>
-                                — <?= e(mb_substr($row['vulnTitle'], 0, 40)) ?><?= mb_strlen($row['vulnTitle'] ?? '') > 40 ? '…' : '' ?>
+                                — <?= e(substr($row['vulnTitle'], 0, 40)) ?><?= strlen($row['vulnTitle'] ?? '') > 40 ? '…' : '' ?>
                             <?php endif; ?>
                         </small>
                     </td>
@@ -169,7 +169,7 @@ require __DIR__ . '/../../includes/header.php';
                     <td>
                         <?php
                         $action = $row['actionTaken'] ?? '';
-                        echo e(mb_strlen($action) > 50 ? mb_substr($action, 0, 50) . '…' : $action);
+                        echo e(strlen($action) > 50 ? substr($action, 0, 50) . '…' : $action);
                         ?>
                     </td>
                     <td class="font-mono"><?= e($row['startedDate'] ?? '—') ?></td>

@@ -178,7 +178,7 @@ require __DIR__ . '/../../includes/header.php';
                     <td>
                         <?php
                         $scope = $row['scopeSummary'] ?? '';
-                        echo e(mb_strlen($scope) > 80 ? mb_substr($scope, 0, 80) . '…' : $scope);
+                        echo e(strlen($scope) > 80 ? substr($scope, 0, 80) . '…' : $scope);
                         ?>
                     </td>
                     <?php if (canWrite($entity)): ?>

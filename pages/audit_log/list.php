@@ -140,8 +140,8 @@ require __DIR__ . '/../../includes/header.php';
 
                         // Truncate detail
                         $detail = $row['actionDetail'] ?? '';
-                        $truncated = mb_strlen($detail) > 80
-                            ? mb_substr($detail, 0, 80) . '…'
+                        $truncated = strlen($detail) > 80
+                            ? substr($detail, 0, 80) . '…'
                             : $detail;
                         ?>
                         <tr>

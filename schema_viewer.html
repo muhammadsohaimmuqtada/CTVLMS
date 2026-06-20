@@ -1,0 +1,753 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CTVLMS — Interactive Schema Viewer</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+    font-family: 'Inter', sans-serif;
+    background: #0a0e17;
+    overflow: hidden;
+    height: 100vh;
+    width: 100vw;
+    cursor: grab;
+}
+
+body.dragging-node { cursor: grabbing; }
+
+/* Grid background */
+#canvas {
+    position: relative;
+    width: 3000px;
+    height: 2000px;
+    background-image:
+        radial-gradient(circle at 1px 1px, rgba(0, 245, 212, 0.06) 1px, transparent 0);
+    background-size: 30px 30px;
+}
+
+/* SVG for relationship lines */
+#lines-svg {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 0;
+}
+
+#lines-svg line {
+    stroke-width: 2;
+    opacity: 0.5;
+    transition: opacity 0.3s;
+}
+
+#lines-svg line.highlight {
+    opacity: 1;
+    stroke-width: 3;
+    filter: drop-shadow(0 0 6px currentColor);
+}
+
+/* Table nodes */
+.table-node {
+    position: absolute;
+    background: rgba(17, 24, 39, 0.92);
+    backdrop-filter: blur(16px);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 12px;
+    min-width: 220px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    z-index: 10;
+    cursor: grab;
+    transition: box-shadow 0.3s, border-color 0.3s, transform 0.15s;
+    animation: nodeAppear 0.6s ease-out forwards;
+    opacity: 0;
+}
+
+@keyframes nodeAppear {
+    from { opacity: 0; transform: scale(0.8) translateY(20px); }
+    to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+.table-node:hover {
+    border-color: rgba(0, 245, 212, 0.4);
+    box-shadow: 0 12px 48px rgba(0, 245, 212, 0.12), 0 0 0 1px rgba(0, 245, 212, 0.2);
+    z-index: 100;
+}
+
+.table-node.dragging {
+    cursor: grabbing;
+    box-shadow: 0 20px 60px rgba(0, 245, 212, 0.2), 0 0 0 2px rgba(0, 245, 212, 0.5);
+    border-color: rgba(0, 245, 212, 0.6);
+    z-index: 1000;
+    transform: scale(1.03);
+}
+
+.table-node.highlighted {
+    border-color: rgba(0, 245, 212, 0.5);
+    box-shadow: 0 12px 48px rgba(0, 245, 212, 0.15), 0 0 0 1px rgba(0, 245, 212, 0.3);
+}
+
+.table-header {
+    padding: 10px 14px;
+    border-radius: 12px 12px 0 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    user-select: none;
+}
+
+.table-header .dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.table-header .table-name {
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 600;
+    font-size: 13px;
+    letter-spacing: 0.5px;
+}
+
+.table-header .badge {
+    margin-left: auto;
+    font-size: 9px;
+    font-weight: 600;
+    padding: 2px 6px;
+    border-radius: 4px;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    opacity: 0.8;
+}
+
+.table-columns {
+    padding: 6px 0;
+    border-top: 1px solid rgba(255,255,255,0.06);
+}
+
+.col-row {
+    display: flex;
+    align-items: center;
+    padding: 3px 14px;
+    font-size: 11.5px;
+    gap: 6px;
+    transition: background 0.2s;
+}
+
+.col-row:hover {
+    background: rgba(0, 245, 212, 0.04);
+}
+
+.col-icon {
+    font-size: 9px;
+    width: 14px;
+    text-align: center;
+    flex-shrink: 0;
+}
+
+.col-icon.pk { color: #f59e0b; }
+.col-icon.fk { color: #f72585; }
+.col-icon.normal { color: #64748b; }
+
+.col-name {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: #e2e8f0;
+}
+
+.col-name.pk-name { color: #f59e0b; font-weight: 600; }
+.col-name.fk-name { color: #f72585; }
+
+.col-type {
+    margin-left: auto;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9.5px;
+    color: #64748b;
+}
+
+/* Domain color schemes */
+.domain-identity .table-header { background: linear-gradient(135deg, rgba(67,97,238,0.3), rgba(67,97,238,0.1)); }
+.domain-identity .table-header .dot { background: #4361ee; box-shadow: 0 0 8px rgba(67,97,238,0.5); }
+.domain-identity .table-header .table-name { color: #93b4ff; }
+.domain-identity .table-header .badge { background: rgba(67,97,238,0.2); color: #93b4ff; }
+
+.domain-asset .table-header { background: linear-gradient(135deg, rgba(0,245,212,0.3), rgba(0,245,212,0.1)); }
+.domain-asset .table-header .dot { background: #00f5d4; box-shadow: 0 0 8px rgba(0,245,212,0.5); }
+.domain-asset .table-header .table-name { color: #00f5d4; }
+.domain-asset .table-header .badge { background: rgba(0,245,212,0.2); color: #00f5d4; }
+
+.domain-vuln .table-header { background: linear-gradient(135deg, rgba(239,68,68,0.3), rgba(239,68,68,0.1)); }
+.domain-vuln .table-header .dot { background: #ef4444; box-shadow: 0 0 8px rgba(239,68,68,0.5); }
+.domain-vuln .table-header .table-name { color: #fca5a5; }
+.domain-vuln .table-header .badge { background: rgba(239,68,68,0.2); color: #fca5a5; }
+
+.domain-threat .table-header { background: linear-gradient(135deg, rgba(114,9,183,0.3), rgba(114,9,183,0.1)); }
+.domain-threat .table-header .dot { background: #7209b7; box-shadow: 0 0 8px rgba(114,9,183,0.5); }
+.domain-threat .table-header .table-name { color: #d8b4fe; }
+.domain-threat .table-header .badge { background: rgba(114,9,183,0.2); color: #d8b4fe; }
+
+.domain-redteam .table-header { background: linear-gradient(135deg, rgba(251,133,0,0.3), rgba(251,133,0,0.1)); }
+.domain-redteam .table-header .dot { background: #fb8500; box-shadow: 0 0 8px rgba(251,133,0,0.5); }
+.domain-redteam .table-header .table-name { color: #fcd34d; }
+.domain-redteam .table-header .badge { background: rgba(251,133,0,0.2); color: #fcd34d; }
+
+.domain-audit .table-header { background: linear-gradient(135deg, rgba(34,197,94,0.3), rgba(34,197,94,0.1)); }
+.domain-audit .table-header .dot { background: #22c55e; box-shadow: 0 0 8px rgba(34,197,94,0.5); }
+.domain-audit .table-header .table-name { color: #86efac; }
+.domain-audit .table-header .badge { background: rgba(34,197,94,0.2); color: #86efac; }
+
+/* Top bar */
+#topbar {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    height: 50px;
+    background: rgba(10,14,23,0.9);
+    backdrop-filter: blur(16px);
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+    display: flex;
+    align-items: center;
+    padding: 0 20px;
+    z-index: 9999;
+    gap: 16px;
+}
+
+#topbar .logo {
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 700;
+    font-size: 15px;
+    background: linear-gradient(135deg, #00f5d4, #4361ee);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    letter-spacing: 1px;
+}
+
+#topbar .subtitle {
+    color: #64748b;
+    font-size: 12px;
+}
+
+.legend {
+    display: flex;
+    gap: 14px;
+    margin-left: auto;
+    align-items: center;
+}
+
+.legend-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 10px;
+    color: #94a3b8;
+    letter-spacing: 0.3px;
+}
+
+.legend-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+}
+
+/* Minimap */
+#minimap {
+    position: fixed;
+    bottom: 16px;
+    right: 16px;
+    width: 200px;
+    height: 130px;
+    background: rgba(17,24,39,0.85);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 8px;
+    z-index: 9999;
+    overflow: hidden;
+}
+
+#minimap-canvas {
+    width: 100%;
+    height: 100%;
+}
+
+/* Zoom controls */
+#zoom-controls {
+    position: fixed;
+    bottom: 16px;
+    left: 16px;
+    display: flex;
+    gap: 6px;
+    z-index: 9999;
+}
+
+#zoom-controls button {
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    border: 1px solid rgba(255,255,255,0.1);
+    background: rgba(17,24,39,0.85);
+    backdrop-filter: blur(12px);
+    color: #94a3b8;
+    font-size: 16px;
+    cursor: pointer;
+    transition: all 0.2s;
+    font-family: 'Inter', sans-serif;
+}
+
+#zoom-controls button:hover {
+    background: rgba(0,245,212,0.1);
+    color: #00f5d4;
+    border-color: rgba(0,245,212,0.3);
+}
+
+#zoom-level {
+    color: #64748b;
+    font-size: 11px;
+    line-height: 36px;
+    padding: 0 8px;
+}
+</style>
+</head>
+<body>
+
+<div id="topbar">
+    <span class="logo">CTVLMS</span>
+    <span class="subtitle">Interactive Database Schema · 12 Tables · 3NF Normalized</span>
+    <div class="legend">
+        <div class="legend-item"><div class="legend-dot" style="background:#4361ee"></div>Identity</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#00f5d4"></div>Assets</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#ef4444"></div>Vulnerability</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#7209b7"></div>Threat Intel</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#fb8500"></div>Red Team</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#22c55e"></div>Audit</div>
+        <div class="legend-item" style="margin-left:8px;"><span style="color:#f59e0b">🔑</span> PK</div>
+        <div class="legend-item"><span style="color:#f72585">⟶</span> FK</div>
+    </div>
+</div>
+
+<div id="zoom-controls">
+    <button onclick="zoomIn()">+</button>
+    <button onclick="zoomOut()">−</button>
+    <button onclick="resetView()">⌂</button>
+    <span id="zoom-level">100%</span>
+</div>
+
+<div id="minimap"><canvas id="minimap-canvas"></canvas></div>
+
+<div id="viewport" style="width:100vw;height:100vh;overflow:hidden;position:relative;margin-top:50px;">
+    <div id="canvas">
+        <svg id="lines-svg"></svg>
+    </div>
+</div>
+
+<script>
+// ── Schema Data ──────────────────────────────────────────────────────
+const tables = [
+    {
+        name: 'users', domain: 'identity', badge: '5 Roles', x: 120, y: 100,
+        columns: [
+            { name: 'userID', type: 'INT PK', pk: true },
+            { name: 'fullName', type: 'VARCHAR(100)' },
+            { name: 'email', type: 'VARCHAR(150) UQ' },
+            { name: 'passwordHash', type: 'VARCHAR(255)' },
+            { name: 'role', type: 'ENUM(5)' },
+            { name: 'isActive', type: 'BOOLEAN' },
+            { name: 'createdAt', type: 'TIMESTAMP' },
+        ]
+    },
+    {
+        name: 'assets', domain: 'asset', badge: '7 Types', x: 420, y: 80,
+        columns: [
+            { name: 'assetID', type: 'INT PK', pk: true },
+            { name: 'assetName', type: 'VARCHAR(150)' },
+            { name: 'assetType', type: 'ENUM(7)' },
+            { name: 'ipAddress', type: 'VARCHAR(45)' },
+            { name: 'osPlatform', type: 'VARCHAR(100)' },
+            { name: 'ownerUserID', type: 'INT FK → users', fk: true },
+            { name: 'criticality', type: 'ENUM(4)' },
+            { name: 'environment', type: 'ENUM(4)' },
+            { name: 'createdAt', type: 'TIMESTAMP' },
+        ]
+    },
+    {
+        name: 'vulnerabilities', domain: 'vuln', badge: 'CVE Catalog', x: 750, y: 60,
+        columns: [
+            { name: 'vulnID', type: 'INT PK', pk: true },
+            { name: 'cveID', type: 'VARCHAR(20) UQ' },
+            { name: 'title', type: 'VARCHAR(200)' },
+            { name: 'description', type: 'TEXT' },
+            { name: 'cvssScore', type: 'DECIMAL(3,1) CHECK' },
+            { name: 'severity', type: 'ENUM(4)' },
+            { name: 'cwe', type: 'VARCHAR(20)' },
+            { name: 'publishedDate', type: 'DATE' },
+            { name: 'createdAt', type: 'TIMESTAMP' },
+        ]
+    },
+    {
+        name: 'asset_vulnerabilities', domain: 'vuln', badge: '★ Junction', x: 550, y: 380,
+        columns: [
+            { name: 'assetVulnID', type: 'INT PK', pk: true },
+            { name: 'assetID', type: 'INT FK → assets', fk: true },
+            { name: 'vulnID', type: 'INT FK → vulns', fk: true },
+            { name: 'status', type: 'ENUM(7) ← State Machine' },
+            { name: 'discoveredDate', type: 'DATE' },
+            { name: 'triagedByUserID', type: 'INT FK → users', fk: true },
+            { name: 'dueDate', type: 'DATE' },
+            { name: 'closedDate', type: 'DATE' },
+            { name: 'notes', type: 'TEXT' },
+        ]
+    },
+    {
+        name: 'threat_actors', domain: 'threat', badge: 'APT Groups', x: 80, y: 420,
+        columns: [
+            { name: 'actorID', type: 'INT PK', pk: true },
+            { name: 'actorName', type: 'VARCHAR(150)' },
+            { name: 'aliasNames', type: 'VARCHAR(255)' },
+            { name: 'motivation', type: 'ENUM(5)' },
+            { name: 'originCountry', type: 'VARCHAR(100)' },
+            { name: 'description', type: 'TEXT' },
+        ]
+    },
+    {
+        name: 'indicators_of_compromise', domain: 'threat', badge: 'IOCs', x: 80, y: 700,
+        columns: [
+            { name: 'iocID', type: 'INT PK', pk: true },
+            { name: 'actorID', type: 'INT FK → actors', fk: true },
+            { name: 'iocType', type: 'ENUM(6)' },
+            { name: 'iocValue', type: 'VARCHAR(255) IDX' },
+            { name: 'mitreTechnique', type: 'VARCHAR(20)' },
+            { name: 'firstSeen', type: 'DATE' },
+            { name: 'lastSeen', type: 'DATE' },
+            { name: 'confidenceLevel', type: 'ENUM(3)' },
+        ]
+    },
+    {
+        name: 'incidents', domain: 'threat', badge: 'IR Tracking', x: 380, y: 650,
+        columns: [
+            { name: 'incidentID', type: 'INT PK', pk: true },
+            { name: 'title', type: 'VARCHAR(200)' },
+            { name: 'assetID', type: 'INT FK → assets', fk: true },
+            { name: 'actorID', type: 'INT FK → actors', fk: true },
+            { name: 'relatedVulnID', type: 'INT FK → vulns', fk: true },
+            { name: 'severity', type: 'ENUM(4)' },
+            { name: 'status', type: 'ENUM(6)' },
+            { name: 'detectedDate', type: 'DATETIME' },
+            { name: 'closedDate', type: 'DATETIME' },
+            { name: 'assignedToUserID', type: 'INT FK → users', fk: true },
+            { name: 'description', type: 'TEXT' },
+        ]
+    },
+    {
+        name: 'engagements', domain: 'redteam', badge: 'Pentest', x: 1050, y: 80,
+        columns: [
+            { name: 'engagementID', type: 'INT PK', pk: true },
+            { name: 'engagementName', type: 'VARCHAR(200)' },
+            { name: 'engagementType', type: 'ENUM(4)' },
+            { name: 'leadUserID', type: 'INT FK → users', fk: true },
+            { name: 'startDate', type: 'DATE' },
+            { name: 'endDate', type: 'DATE' },
+            { name: 'status', type: 'ENUM(4)' },
+            { name: 'scopeSummary', type: 'TEXT' },
+        ]
+    },
+    {
+        name: 'engagement_assets', domain: 'redteam', badge: 'Junction', x: 1070, y: 370,
+        columns: [
+            { name: 'engagementAssetID', type: 'INT PK', pk: true },
+            { name: 'engagementID', type: 'INT FK → engagements', fk: true },
+            { name: 'assetID', type: 'INT FK → assets', fk: true },
+        ]
+    },
+    {
+        name: 'findings', domain: 'redteam', badge: 'Red Team', x: 1050, y: 530,
+        columns: [
+            { name: 'findingID', type: 'INT PK', pk: true },
+            { name: 'engagementID', type: 'INT FK → engagements', fk: true },
+            { name: 'assetID', type: 'INT FK → assets', fk: true },
+            { name: 'vulnID', type: 'INT FK → vulns', fk: true },
+            { name: 'discoveredByUserID', type: 'INT FK → users', fk: true },
+            { name: 'title', type: 'VARCHAR(200)' },
+            { name: 'riskRating', type: 'ENUM(4)' },
+            { name: 'exploitedSuccessfully', type: 'BOOLEAN' },
+            { name: 'proofOfConcept', type: 'TEXT' },
+            { name: 'recommendation', type: 'TEXT' },
+            { name: 'reportedDate', type: 'DATE' },
+        ]
+    },
+    {
+        name: 'remediations', domain: 'vuln', badge: 'Fix Tracking', x: 750, y: 500,
+        columns: [
+            { name: 'remediationID', type: 'INT PK', pk: true },
+            { name: 'assetVulnID', type: 'INT FK → asset_vulns', fk: true },
+            { name: 'assignedToUserID', type: 'INT FK → users', fk: true },
+            { name: 'actionTaken', type: 'TEXT' },
+            { name: 'remediationType', type: 'ENUM(5)' },
+            { name: 'startedDate', type: 'DATE' },
+            { name: 'completedDate', type: 'DATE' },
+            { name: 'verifiedByUserID', type: 'INT FK → users', fk: true },
+            { name: 'verificationDate', type: 'DATE' },
+        ]
+    },
+    {
+        name: 'audit_log', domain: 'audit', badge: 'Non-Repudiation', x: 140, y: 250,
+        columns: [
+            { name: 'logID', type: 'INT PK', pk: true },
+            { name: 'userID', type: 'INT FK → users', fk: true },
+            { name: 'actionType', type: 'VARCHAR(50)' },
+            { name: 'tableAffected', type: 'VARCHAR(50)' },
+            { name: 'recordID', type: 'INT' },
+            { name: 'actionDetail', type: 'TEXT' },
+            { name: 'actionTimestamp', type: 'TIMESTAMP' },
+        ]
+    },
+];
+
+// FK relationships: [from_table, to_table, color]
+const relationships = [
+    ['assets', 'users', '#4361ee'],
+    ['asset_vulnerabilities', 'assets', '#00f5d4'],
+    ['asset_vulnerabilities', 'vulnerabilities', '#ef4444'],
+    ['asset_vulnerabilities', 'users', '#4361ee'],
+    ['indicators_of_compromise', 'threat_actors', '#7209b7'],
+    ['incidents', 'assets', '#00f5d4'],
+    ['incidents', 'threat_actors', '#7209b7'],
+    ['incidents', 'vulnerabilities', '#ef4444'],
+    ['incidents', 'users', '#4361ee'],
+    ['engagements', 'users', '#4361ee'],
+    ['engagement_assets', 'engagements', '#fb8500'],
+    ['engagement_assets', 'assets', '#00f5d4'],
+    ['findings', 'engagements', '#fb8500'],
+    ['findings', 'assets', '#00f5d4'],
+    ['findings', 'vulnerabilities', '#ef4444'],
+    ['findings', 'users', '#4361ee'],
+    ['remediations', 'asset_vulnerabilities', '#ef4444'],
+    ['remediations', 'users', '#4361ee'],
+    ['audit_log', 'users', '#4361ee'],
+];
+
+// ── Rendering ────────────────────────────────────────────────────────
+const canvas = document.getElementById('canvas');
+const svg = document.getElementById('lines-svg');
+const viewport = document.getElementById('viewport');
+const tableElements = {};
+
+let scale = 1;
+let panX = 0, panY = 0;
+let isPanning = false;
+let panStartX, panStartY;
+
+// Create table nodes
+tables.forEach((t, i) => {
+    const el = document.createElement('div');
+    el.className = `table-node domain-${t.domain}`;
+    el.id = `table-${t.name}`;
+    el.style.left = t.x + 'px';
+    el.style.top = t.y + 'px';
+    el.style.animationDelay = (i * 0.06) + 's';
+
+    let colsHTML = t.columns.map(c => {
+        let iconClass = 'normal', nameClass = '', icon = '○';
+        if (c.pk) { iconClass = 'pk'; nameClass = 'pk-name'; icon = '🔑'; }
+        else if (c.fk) { iconClass = 'fk'; nameClass = 'fk-name'; icon = '⟶'; }
+        return `<div class="col-row">
+            <span class="col-icon ${iconClass}">${icon}</span>
+            <span class="col-name ${nameClass}">${c.name}</span>
+            <span class="col-type">${c.type}</span>
+        </div>`;
+    }).join('');
+
+    el.innerHTML = `
+        <div class="table-header">
+            <div class="dot"></div>
+            <span class="table-name">${t.name}</span>
+            <span class="badge">${t.badge}</span>
+        </div>
+        <div class="table-columns">${colsHTML}</div>
+    `;
+
+    canvas.appendChild(el);
+    tableElements[t.name] = el;
+
+    // Drag handling
+    let isDragging = false, startX, startY, origLeft, origTop;
+
+    el.addEventListener('mousedown', (e) => {
+        if (e.button !== 0) return;
+        isDragging = true;
+        document.body.classList.add('dragging-node');
+        el.classList.add('dragging');
+        startX = e.clientX;
+        startY = e.clientY;
+        origLeft = parseInt(el.style.left);
+        origTop = parseInt(el.style.top);
+        e.stopPropagation();
+    });
+
+    document.addEventListener('mousemove', (e) => {
+        if (!isDragging) return;
+        const dx = (e.clientX - startX) / scale;
+        const dy = (e.clientY - startY) / scale;
+        el.style.left = (origLeft + dx) + 'px';
+        el.style.top = (origTop + dy) + 'px';
+        drawLines();
+        updateMinimap();
+    });
+
+    document.addEventListener('mouseup', () => {
+        if (!isDragging) return;
+        isDragging = false;
+        document.body.classList.remove('dragging-node');
+        el.classList.remove('dragging');
+    });
+
+    // Hover highlighting
+    el.addEventListener('mouseenter', () => highlightRelated(t.name, true));
+    el.addEventListener('mouseleave', () => highlightRelated(t.name, false));
+});
+
+function highlightRelated(tableName, on) {
+    relationships.forEach((r, i) => {
+        const line = document.getElementById(`rel-${i}`);
+        if (!line) return;
+        if (r[0] === tableName || r[1] === tableName) {
+            if (on) line.classList.add('highlight');
+            else line.classList.remove('highlight');
+        }
+    });
+    relationships.forEach(r => {
+        if (r[0] === tableName) tableElements[r[1]]?.classList.toggle('highlighted', on);
+        if (r[1] === tableName) tableElements[r[0]]?.classList.toggle('highlighted', on);
+    });
+}
+
+// Draw relationship lines
+function drawLines() {
+    svg.innerHTML = '';
+    relationships.forEach((r, i) => {
+        const from = tableElements[r[0]];
+        const to = tableElements[r[1]];
+        if (!from || !to) return;
+
+        const fromRect = { x: parseInt(from.style.left), y: parseInt(from.style.top), w: from.offsetWidth, h: from.offsetHeight };
+        const toRect = { x: parseInt(to.style.left), y: parseInt(to.style.top), w: to.offsetWidth, h: to.offsetHeight };
+
+        const fromCX = fromRect.x + fromRect.w / 2;
+        const fromCY = fromRect.y + fromRect.h / 2;
+        const toCX = toRect.x + toRect.w / 2;
+        const toCY = toRect.y + toRect.h / 2;
+
+        // Edge point calculation
+        const fromPt = getEdgePoint(fromRect, toCX, toCY);
+        const toPt = getEdgePoint(toRect, fromCX, fromCY);
+
+        const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        line.id = `rel-${i}`;
+        line.setAttribute('x1', fromPt.x);
+        line.setAttribute('y1', fromPt.y);
+        line.setAttribute('x2', toPt.x);
+        line.setAttribute('y2', toPt.y);
+        line.setAttribute('stroke', r[2]);
+        line.style.color = r[2];
+        svg.appendChild(line);
+    });
+}
+
+function getEdgePoint(rect, targetX, targetY) {
+    const cx = rect.x + rect.w / 2;
+    const cy = rect.y + rect.h / 2;
+    const dx = targetX - cx;
+    const dy = targetY - cy;
+    const absDX = Math.abs(dx);
+    const absDY = Math.abs(dy);
+    let px, py;
+
+    if (absDX * rect.h > absDY * rect.w) {
+        px = dx > 0 ? rect.x + rect.w : rect.x;
+        py = cy + dy * (rect.w / 2) / absDX;
+    } else {
+        py = dy > 0 ? rect.y + rect.h : rect.y;
+        px = cx + dx * (rect.h / 2) / absDY;
+    }
+    return { x: px, y: py };
+}
+
+// Pan
+viewport.addEventListener('mousedown', (e) => {
+    if (e.target !== viewport && e.target !== canvas && e.target !== svg) return;
+    isPanning = true;
+    panStartX = e.clientX - panX;
+    panStartY = e.clientY - panY;
+    viewport.style.cursor = 'grabbing';
+});
+
+document.addEventListener('mousemove', (e) => {
+    if (!isPanning) return;
+    panX = e.clientX - panStartX;
+    panY = e.clientY - panStartY;
+    applyTransform();
+    updateMinimap();
+});
+
+document.addEventListener('mouseup', () => {
+    isPanning = false;
+    viewport.style.cursor = 'grab';
+});
+
+// Zoom
+viewport.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const delta = e.deltaY > 0 ? -0.08 : 0.08;
+    scale = Math.max(0.3, Math.min(2, scale + delta));
+    applyTransform();
+    document.getElementById('zoom-level').textContent = Math.round(scale * 100) + '%';
+    updateMinimap();
+}, { passive: false });
+
+function zoomIn() { scale = Math.min(2, scale + 0.15); applyTransform(); document.getElementById('zoom-level').textContent = Math.round(scale * 100) + '%'; updateMinimap(); }
+function zoomOut() { scale = Math.max(0.3, scale - 0.15); applyTransform(); document.getElementById('zoom-level').textContent = Math.round(scale * 100) + '%'; updateMinimap(); }
+function resetView() { scale = 1; panX = 0; panY = 0; applyTransform(); document.getElementById('zoom-level').textContent = '100%'; updateMinimap(); }
+
+function applyTransform() {
+    canvas.style.transform = `translate(${panX}px, ${panY}px) scale(${scale})`;
+    canvas.style.transformOrigin = '0 0';
+}
+
+// Minimap
+function updateMinimap() {
+    const mc = document.getElementById('minimap-canvas');
+    const ctx = mc.getContext('2d');
+    mc.width = 200; mc.height = 130;
+    ctx.clearRect(0, 0, 200, 130);
+
+    const domainColors = { identity: '#4361ee', asset: '#00f5d4', vuln: '#ef4444', threat: '#7209b7', redteam: '#fb8500', audit: '#22c55e' };
+    const sx = 200 / 1400, sy = 130 / 1000;
+    const s = Math.min(sx, sy);
+
+    tables.forEach(t => {
+        const el = tableElements[t.name];
+        const x = parseInt(el.style.left) * s;
+        const y = parseInt(el.style.top) * s;
+        ctx.fillStyle = domainColors[t.domain] || '#fff';
+        ctx.globalAlpha = 0.6;
+        ctx.fillRect(x, y, el.offsetWidth * s, el.offsetHeight * s);
+    });
+
+    // Viewport rectangle
+    ctx.globalAlpha = 0.3;
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 1;
+    const vx = -panX / scale * s;
+    const vy = -panY / scale * s;
+    const vw = viewport.clientWidth / scale * s;
+    const vh = viewport.clientHeight / scale * s;
+    ctx.strokeRect(vx, vy, vw, vh);
+}
+
+// Initial draw
+setTimeout(() => { drawLines(); updateMinimap(); }, 700);
+</script>
+</body>
+</html>

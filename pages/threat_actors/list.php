@@ -121,7 +121,7 @@ require __DIR__ . '/../../includes/header.php';
                     <td><?= e($row['originCountry'] ?: '—') ?></td>
                     <td>
                         <span title="<?= e($row['description'] ?? '') ?>">
-                            <?= e($row['description'] ? (mb_strlen($row['description']) > 80 ? mb_substr($row['description'], 0, 80) . '…' : $row['description']) : '—') ?>
+                            <?= e($row['description'] ? (strlen($row['description']) > 80 ? substr($row['description'], 0, 80) . '…' : $row['description']) : '—') ?>
                         </span>
                     </td>
                     <?php if (canWrite($entity)): ?>

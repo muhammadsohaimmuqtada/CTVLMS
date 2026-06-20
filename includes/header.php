@@ -59,7 +59,7 @@ function navActive(string $prefix): string {
                 </li>
                 <li class="nav-item dropdown">
                     <a class="nav-link dropdown-toggle <?= navActive('assets') || navActive('vulnerabilities') || navActive('asset_vulns') ? 'active' : '' ?>"
-                       href="#" data-bs-toggle="dropdown">
+                       role="button" style="cursor: pointer;" data-bs-toggle="dropdown">
                         <i class="bi bi-hdd-rack"></i> Assets & Vulns
                     </a>
                     <ul class="dropdown-menu dropdown-menu-dark">
@@ -71,7 +71,7 @@ function navActive(string $prefix): string {
                 </li>
                 <li class="nav-item dropdown">
                     <a class="nav-link dropdown-toggle <?= navActive('threat_actors') || navActive('iocs') || navActive('incidents') ? 'active' : '' ?>"
-                       href="#" data-bs-toggle="dropdown">
+                       role="button" style="cursor: pointer;" data-bs-toggle="dropdown">
                         <i class="bi bi-shield-exclamation"></i> Threat Intel
                     </a>
                     <ul class="dropdown-menu dropdown-menu-dark">
@@ -83,7 +83,7 @@ function navActive(string $prefix): string {
                 </li>
                 <li class="nav-item dropdown">
                     <a class="nav-link dropdown-toggle <?= navActive('engagements') || navActive('findings') || navActive('remediations') ? 'active' : '' ?>"
-                       href="#" data-bs-toggle="dropdown">
+                       role="button" style="cursor: pointer;" data-bs-toggle="dropdown">
                         <i class="bi bi-crosshair"></i> Red Team
                     </a>
                     <ul class="dropdown-menu dropdown-menu-dark">
@@ -101,7 +101,7 @@ function navActive(string $prefix): string {
                 <?php if ($user['role'] === 'Admin'): ?>
                 <li class="nav-item dropdown">
                     <a class="nav-link dropdown-toggle <?= navActive('users') || navActive('audit_log') ? 'active' : '' ?>"
-                       href="#" data-bs-toggle="dropdown">
+                       role="button" style="cursor: pointer;" data-bs-toggle="dropdown">
                         <i class="bi bi-gear"></i> Admin
                     </a>
                     <ul class="dropdown-menu dropdown-menu-dark">
