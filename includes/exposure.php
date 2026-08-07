@@ -42,24 +42,16 @@ function cpeVersionKnown(?string $version): bool
 
 function versionWithinNvdRange(string $version, array $rule): bool
 {
-    if (!empty($rule['versionStartIncluding']) && version_compare($version, $rule['versionStartIncluding'], '<')) {
-        return false;
-    }
-    if (!empty($rule['versionStartExcluding']) && version_compare($version, $rule['versionStartExcluding'], '<=')) {
-        return false;
-    }
-    if (!empty($rule['versionEndIncluding']) && version_compare($version, $rule['versionEndIncluding'], '>')) {
-        return false;
-    }
-    if (!empty($rule['versionEndExcluding']) && version_compare($version, $rule['versionEndExcluding'], '>=')) {
-        return false;
-    }
+    if (!empty($rule['versionStartIncluding']) && version_compare($version, $rule['versionStartIncluding'], '<')) return false;
+    if (!empty($rule['versionStartExcluding']) && version_compare($version, $rule['versionStartExcluding'], '<=')) return false;
+    if (!empty($rule['versionEndIncluding']) && version_compare($version, $rule['versionEndIncluding'], '>')) return false;
+    if (!empty($rule['versionEndExcluding']) && version_compare($version, $rule['versionEndExcluding'], '>=')) return false;
     return true;
 }
 
 /**
  * Evaluate one inventory CPE against one NVD CPE rule.
- * Returns null when not affected; otherwise match metadata.
+ * Compound NVD configurations are never auto-confirmed from a single CPE.
  */
 function evaluateCpeRule(string $inventoryCpe, array $rule): ?array
 {
@@ -69,38 +61,42 @@ function evaluateCpeRule(string $inventoryCpe, array $rule): ?array
         return null;
     }
 
+    if (empty($rule['vulnerable'])) {
+        return null;
+    }
+
     $observedVersion = $observed['version'];
     $criteriaVersion = $criteria['version'];
     $hasRange = !empty($rule['versionStartIncluding']) || !empty($rule['versionStartExcluding']) ||
                 !empty($rule['versionEndIncluding']) || !empty($rule['versionEndExcluding']);
+    $complex = !empty($rule['configurationComplex']);
 
-    if (!$rule['vulnerable']) {
-        return null;
-    }
-
+    $result = null;
     if (cpeVersionKnown($criteriaVersion)) {
-        if (!cpeVersionKnown($observedVersion) || version_compare($observedVersion, $criteriaVersion, '!=')) {
-            return null;
-        }
-        return ['type' => 'CPE_Exact', 'confidence' => 0.995, 'status' => 'Confirmed'];
-    }
-
-    if ($hasRange) {
+        if (!cpeVersionKnown($observedVersion) || version_compare($observedVersion, $criteriaVersion, '!=')) return null;
+        $result = ['type' => 'CPE_Exact', 'confidence' => 0.995, 'status' => 'Confirmed'];
+    } elseif ($hasRange) {
         if (!cpeVersionKnown($observedVersion)) {
-            return ['type' => 'CPE_Potential', 'confidence' => 0.600, 'status' => 'Potential'];
+            $result = ['type' => 'CPE_Potential', 'confidence' => 0.600, 'status' => 'Potential'];
+        } else {
+            if (!versionWithinNvdRange($observedVersion, $rule)) return null;
+            $result = ['type' => 'CPE_Range', 'confidence' => 0.960, 'status' => 'Confirmed'];
         }
-        if (!versionWithinNvdRange($observedVersion, $rule)) {
-            return null;
-        }
-        return ['type' => 'CPE_Range', 'confidence' => 0.960, 'status' => 'Confirmed'];
+    } elseif (cpeVersionKnown($observedVersion)) {
+        $result = ['type' => 'CPE_Exact', 'confidence' => 0.950, 'status' => 'Confirmed'];
+    } else {
+        $result = ['type' => 'CPE_Potential', 'confidence' => 0.650, 'status' => 'Potential'];
     }
 
-    // Wildcard-version CPE with no range means the product itself is affected.
-    if (cpeVersionKnown($observedVersion)) {
-        return ['type' => 'CPE_Exact', 'confidence' => 0.950, 'status' => 'Confirmed'];
+    if ($complex) {
+        // Additional platform/AND/negation conditions must be proven before an
+        // automated remediation decision can be made.
+        $result['type'] = 'CPE_Potential';
+        $result['confidence'] = min($result['confidence'], 0.700);
+        $result['status'] = 'Potential';
     }
 
-    return ['type' => 'CPE_Potential', 'confidence' => 0.650, 'status' => 'Potential'];
+    return $result;
 }
 
 function loadCpeInventory(PDO $db, ?int $assetID = null): array
@@ -198,6 +194,7 @@ function evaluateExposureInventory(PDO $db, ?int $assetID = null): array
                 'observed_cpe' => $item['cpe'],
                 'observed_version' => $item['version'],
                 'nvd_criteria' => $rule['criteria'],
+                'configuration_complex' => (bool)$rule['configurationComplex'],
                 'version_start_including' => $rule['versionStartIncluding'],
                 'version_start_excluding' => $rule['versionStartExcluding'],
                 'version_end_including' => $rule['versionEndIncluding'],
