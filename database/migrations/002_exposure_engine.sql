@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS vulnerability_cpe_matches (
     vulnID INT NOT NULL,
     criteria VARCHAR(512) NOT NULL,
     vulnerable BOOLEAN NOT NULL DEFAULT TRUE,
+    configurationComplex BOOLEAN NOT NULL DEFAULT FALSE,
     versionStartIncluding VARCHAR(120),
     versionStartExcluding VARCHAR(120),
     versionEndIncluding VARCHAR(120),
