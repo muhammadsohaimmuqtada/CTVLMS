@@ -1,0 +1,17 @@
+[Unit]
+Description=CTVLMS continuous exposure management cycle
+After=network-online.target mariadb.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ctvlms
+Group=ctvlms
+WorkingDirectory=/opt/ctvlms
+EnvironmentFile=/etc/ctvlms/ctvlms.env
+ExecStart=/usr/bin/php /opt/ctvlms/bin/continuous-cycle.php
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/log/ctvlms
