@@ -10,6 +10,8 @@ if (!canWrite($entity)) {
     redirect("?page={$entity}/list");
 }
 
+$statuses = lifecycleStatuses();
+
 // Handle inline status update (AJAX from list page)
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['inline_status'])) {
     validateCSRF();
@@ -17,15 +19,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['inline_status'])) {
     $targetId  = (int)($_POST['id'] ?? 0);
     $newStatus = $_POST['inline_status'] ?? '';
 
-    $validStatuses = ['Discovered', 'Triaged', 'Confirmed', 'Remediation_In_Progress', 'Remediated', 'Verified_Closed', 'Risk_Accepted'];
-    if ($targetId <= 0 || !in_array($newStatus, $validStatuses, true)) {
+    if ($targetId <= 0 || !in_array($newStatus, $statuses, true)) {
         http_response_code(400);
         echo 'Invalid input';
         exit;
     }
 
-    // Fetch current status
-    $stmt = $db->prepare('SELECT status, closedDate FROM asset_vulnerabilities WHERE assetVulnID = :id');
+    $stmt = $db->prepare('SELECT status, closedDate, notes FROM asset_vulnerabilities WHERE assetVulnID = :id');
     $stmt->execute([':id' => $targetId]);
     $current = $stmt->fetch();
     if (!$current) {
@@ -35,37 +35,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['inline_status'])) {
     }
 
     $oldStatus = $current['status'];
-
-    // ENFORCE STATE MACHINE RULES FOR INLINE
-    if ($newStatus === 'Verified_Closed') {
-        $remStmt = $db->prepare("SELECT COUNT(*) FROM remediations WHERE assetVulnID = :id AND verifiedByUserID IS NOT NULL AND verificationDate IS NOT NULL");
-        $remStmt->execute([':id' => $targetId]);
-        if ($remStmt->fetchColumn() == 0) {
-            http_response_code(403);
-            echo 'Cannot move to Verified_Closed: requires a verified remediation record.';
-            exit;
-        }
-    }
-    
-    if ($newStatus === 'Risk_Accepted') {
-        $userRole = $_SESSION['user']['role'] ?? '';
-        if ($userRole !== 'Admin' && $userRole !== 'Vuln_Manager') {
-            http_response_code(403);
-            echo 'Access denied: Only Admins or Vuln_Managers can accept risk.';
-            exit;
-        }
+    $error = validateLifecycleTransition($db, $targetId, $oldStatus, $newStatus, (string)($current['notes'] ?? ''));
+    if ($error !== null) {
+        http_response_code(403);
+        echo $error;
+        exit;
     }
 
-    // Auto-set closedDate for terminal statuses
     $closedDate = $current['closedDate'];
-    if (in_array($newStatus, ['Remediated', 'Verified_Closed'], true) && empty($closedDate)) {
-        $closedDate = date('Y-m-d');
-        $stmt = $db->prepare('UPDATE asset_vulnerabilities SET status = :status, closedDate = :closed WHERE assetVulnID = :id');
-        $stmt->execute([':status' => $newStatus, ':closed' => $closedDate, ':id' => $targetId]);
-    } else {
-        $stmt = $db->prepare('UPDATE asset_vulnerabilities SET status = :status WHERE assetVulnID = :id');
-        $stmt->execute([':status' => $newStatus, ':id' => $targetId]);
+    if (terminalLifecycleStatus($newStatus)) {
+        $closedDate = $closedDate ?: date('Y-m-d');
+    } elseif (terminalLifecycleStatus($oldStatus)) {
+        $closedDate = null;
     }
+
+    $stmt = $db->prepare(
+        'UPDATE asset_vulnerabilities
+         SET status = :status, closedDate = :closed
+         WHERE assetVulnID = :id'
+    );
+    $stmt->execute([':status' => $newStatus, ':closed' => $closedDate, ':id' => $targetId]);
 
     logAction('STATUS_CHANGE', 'asset_vulnerabilities', $targetId, "Status: {$oldStatus} → {$newStatus}");
     http_response_code(200);
@@ -89,60 +78,48 @@ if ($isEdit) {
 }
 
 // Fetch dropdown data
-$assetsStmt = $db->query('SELECT assetID, assetName FROM assets ORDER BY assetName');
-$assets = $assetsStmt->fetchAll();
-
-$vulnsStmt = $db->query('SELECT vulnID, cveID, title FROM vulnerabilities ORDER BY title');
-$vulns = $vulnsStmt->fetchAll();
-
-$usersStmt = $db->query('SELECT userID, fullName FROM users WHERE isActive = 1 ORDER BY fullName');
-$users = $usersStmt->fetchAll();
-
-$statuses = ['Discovered', 'Triaged', 'Confirmed', 'Remediation_In_Progress', 'Remediated', 'Verified_Closed', 'Risk_Accepted'];
+$assets = $db->query('SELECT assetID, assetName FROM assets ORDER BY assetName')->fetchAll();
+$vulns = $db->query('SELECT vulnID, cveID, title FROM vulnerabilities ORDER BY title')->fetchAll();
+$users = $db->query('SELECT userID, fullName FROM users WHERE isActive = 1 ORDER BY fullName')->fetchAll();
 
 // Handle form submission
 $errors = [];
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['inline_status'])) {
     validateCSRF();
 
-    $assetID        = (int)($_POST['assetID'] ?? 0);
-    $vulnID         = (int)($_POST['vulnID'] ?? 0);
-    $status         = $_POST['status'] ?? '';
-    $discoveredDate = $_POST['discoveredDate'] ?? '';
-    $triagedByUserID= ($_POST['triagedByUserID'] ?? '') !== '' ? (int)$_POST['triagedByUserID'] : null;
-    $dueDate        = $_POST['dueDate'] ?? '';
-    $closedDate     = $_POST['closedDate'] ?? '';
-    $notes          = trim($_POST['notes'] ?? '');
+    $assetID         = (int)($_POST['assetID'] ?? 0);
+    $vulnID          = (int)($_POST['vulnID'] ?? 0);
+    $status          = $_POST['status'] ?? '';
+    $discoveredDate  = $_POST['discoveredDate'] ?? '';
+    $triagedByUserID = ($_POST['triagedByUserID'] ?? '') !== '' ? (int)$_POST['triagedByUserID'] : null;
+    $dueDate         = $_POST['dueDate'] ?? '';
+    $notes           = trim($_POST['notes'] ?? '');
 
     if ($assetID <= 0) $errors[] = 'Asset is required.';
     if ($vulnID <= 0) $errors[] = 'Vulnerability is required.';
     if (!in_array($status, $statuses, true)) $errors[] = 'Invalid status.';
     if ($discoveredDate === '') $errors[] = 'Discovered date is required.';
 
-    // Auto-set closedDate for terminal statuses
-    if (in_array($status, ['Remediated', 'Verified_Closed', 'Risk_Accepted'], true) && $closedDate === '') {
-        $closedDate = date('Y-m-d');
+    if (!$isEdit && $status !== 'Discovered') {
+        $errors[] = 'New asset-vulnerability records must begin in Discovered state.';
     }
 
-    // ENFORCE STATE MACHINE RULES
-    if ($status === 'Verified_Closed') {
-        // Check if there is a verified remediation
-        if ($isEdit) {
-            $remStmt = $db->prepare("SELECT COUNT(*) FROM remediations WHERE assetVulnID = :id AND verifiedByUserID IS NOT NULL AND verificationDate IS NOT NULL");
-            $remStmt->execute([':id' => $id]);
-            if ($remStmt->fetchColumn() == 0) {
-                $errors[] = 'Cannot move to Verified_Closed: requires a verified remediation record.';
-            }
-        } else {
-            $errors[] = 'Cannot move a new record directly to Verified_Closed.';
+    if ($isEdit && empty($errors)) {
+        $transitionError = validateLifecycleTransition($db, $id, $record['status'], $status, $notes);
+        if ($transitionError !== null) {
+            $errors[] = $transitionError;
         }
     }
-    
-    if ($status === 'Risk_Accepted') {
-        $userRole = $_SESSION['user']['role'] ?? '';
-        if ($userRole !== 'Admin' && $userRole !== 'Vuln_Manager') {
-            $errors[] = 'Access denied: Only Admins or Vuln_Managers can accept risk.';
-        }
+
+    if ($status === 'Triaged' && $triagedByUserID === null) {
+        $triagedByUserID = (int)($_SESSION['user_id'] ?? 0) ?: null;
+    }
+
+    $closedDate = $record['closedDate'] ?? null;
+    if (terminalLifecycleStatus($status)) {
+        $closedDate = $closedDate ?: date('Y-m-d');
+    } elseif ($isEdit && terminalLifecycleStatus($record['status'])) {
+        $closedDate = null;
     }
 
     if (empty($errors)) {
@@ -153,35 +130,47 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['inline_status'])) {
             ':discovered' => $discoveredDate,
             ':triaged'    => $triagedByUserID,
             ':due'        => $dueDate ?: null,
-            ':closed'     => $closedDate ?: null,
+            ':closed'     => $closedDate,
             ':notes'      => $notes ?: null,
         ];
 
-        // Build audit detail
-        $statusDetail = '';
+        try {
+            if ($isEdit) {
+                $oldStatus = $record['status'];
+                $stmt = $db->prepare(
+                    'UPDATE asset_vulnerabilities
+                     SET assetID = :asset, vulnID = :vuln, status = :status,
+                         discoveredDate = :discovered, triagedByUserID = :triaged,
+                         dueDate = :due, closedDate = :closed, notes = :notes
+                     WHERE assetVulnID = :id'
+                );
+                $data[':id'] = $id;
+                $stmt->execute($data);
 
-        if ($isEdit) {
-            $oldStatus = $record['status'];
-            if ($oldStatus !== $status) {
-                $statusDetail = "Status: {$oldStatus} → {$status}. ";
+                $detail = $oldStatus !== $status
+                    ? "Status: {$oldStatus} → {$status}. Updated asset-vulnerability mapping"
+                    : 'Updated asset-vulnerability mapping';
+                logAction('UPDATE', 'asset_vulnerabilities', $id, $detail);
+                flash('success', 'Record updated successfully.');
+            } else {
+                $stmt = $db->prepare(
+                    'INSERT INTO asset_vulnerabilities
+                        (assetID, vulnID, status, discoveredDate, triagedByUserID, dueDate, closedDate, notes)
+                     VALUES (:asset, :vuln, :status, :discovered, :triaged, :due, :closed, :notes)'
+                );
+                $stmt->execute($data);
+                $newId = (int)$db->lastInsertId();
+                logAction('CREATE', 'asset_vulnerabilities', $newId, 'Mapped vulnerability to asset in Discovered state');
+                flash('success', 'Vulnerability mapped to asset successfully.');
             }
-
-            $stmt = $db->prepare('UPDATE asset_vulnerabilities SET assetID = :asset, vulnID = :vuln, status = :status,
-                                  discoveredDate = :discovered, triagedByUserID = :triaged, dueDate = :due,
-                                  closedDate = :closed, notes = :notes WHERE assetVulnID = :id');
-            $data[':id'] = $id;
-            $stmt->execute($data);
-            logAction('UPDATE', 'asset_vulnerabilities', $id, $statusDetail . 'Updated asset-vulnerability mapping');
-            flash('success', 'Record updated successfully.');
-        } else {
-            $stmt = $db->prepare('INSERT INTO asset_vulnerabilities (assetID, vulnID, status, discoveredDate, triagedByUserID, dueDate, closedDate, notes)
-                                  VALUES (:asset, :vuln, :status, :discovered, :triaged, :due, :closed, :notes)');
-            $stmt->execute($data);
-            $newId = (int)$db->lastInsertId();
-            logAction('CREATE', 'asset_vulnerabilities', $newId, "Mapped vulnerability to asset with status: {$status}");
-            flash('success', 'Vulnerability mapped to asset successfully.');
+            redirect("?page={$entity}/list");
+        } catch (PDOException $ex) {
+            if ((string)$ex->getCode() === '23000') {
+                $errors[] = 'This vulnerability is already mapped to that asset.';
+            } else {
+                throw $ex;
+            }
         }
-        redirect("?page={$entity}/list");
     }
 }
 
@@ -218,10 +207,8 @@ require __DIR__ . '/../../includes/header.php';
                 <label for="assetID" class="form-label">Asset <span class="text-danger">*</span></label>
                 <select class="form-select bg-dark text-light border-secondary" id="assetID" name="assetID" required>
                     <option value="">— Select Asset —</option>
-                    <?php
-                    $currentAsset = $record['assetID'] ?? ($_POST['assetID'] ?? '');
-                    foreach ($assets as $a):
-                    ?>
+                    <?php $currentAsset = $record['assetID'] ?? ($_POST['assetID'] ?? ''); ?>
+                    <?php foreach ($assets as $a): ?>
                         <option value="<?= (int)$a['assetID'] ?>" <?= (string)$currentAsset === (string)$a['assetID'] ? 'selected' : '' ?>><?= e($a['assetName']) ?></option>
                     <?php endforeach; ?>
                 </select>
@@ -231,10 +218,8 @@ require __DIR__ . '/../../includes/header.php';
                 <label for="vulnID" class="form-label">Vulnerability <span class="text-danger">*</span></label>
                 <select class="form-select bg-dark text-light border-secondary" id="vulnID" name="vulnID" required>
                     <option value="">— Select Vulnerability —</option>
-                    <?php
-                    $currentVuln = $record['vulnID'] ?? ($_POST['vulnID'] ?? '');
-                    foreach ($vulns as $v):
-                    ?>
+                    <?php $currentVuln = $record['vulnID'] ?? ($_POST['vulnID'] ?? ''); ?>
+                    <?php foreach ($vulns as $v): ?>
                         <option value="<?= (int)$v['vulnID'] ?>" <?= (string)$currentVuln === (string)$v['vulnID'] ? 'selected' : '' ?>>
                             <?= e(($v['cveID'] ? $v['cveID'] . ' — ' : '') . $v['title']) ?>
                         </option>
@@ -245,13 +230,14 @@ require __DIR__ . '/../../includes/header.php';
             <div class="col-md-4">
                 <label for="status" class="form-label">Status <span class="text-danger">*</span></label>
                 <select class="form-select bg-dark text-light border-secondary" id="status" name="status" required>
-                    <?php
-                    $currentStatus = $record['status'] ?? ($_POST['status'] ?? 'Discovered');
-                    foreach ($statuses as $st):
-                    ?>
+                    <?php $currentStatus = $record['status'] ?? ($_POST['status'] ?? 'Discovered'); ?>
+                    <?php foreach ($statuses as $st): ?>
                         <option value="<?= e($st) ?>" <?= $currentStatus === $st ? 'selected' : '' ?>><?= e(str_replace('_', ' ', $st)) ?></option>
                     <?php endforeach; ?>
                 </select>
+                <?php if ($isEdit): ?>
+                    <div class="form-text text-secondary small">Transitions are validated server-side.</div>
+                <?php endif; ?>
             </div>
 
             <div class="col-md-4">
@@ -264,10 +250,8 @@ require __DIR__ . '/../../includes/header.php';
                 <label for="triagedByUserID" class="form-label">Triaged By</label>
                 <select class="form-select bg-dark text-light border-secondary" id="triagedByUserID" name="triagedByUserID">
                     <option value="">— Not Triaged —</option>
-                    <?php
-                    $currentTriaged = $record['triagedByUserID'] ?? ($_POST['triagedByUserID'] ?? '');
-                    foreach ($users as $u):
-                    ?>
+                    <?php $currentTriaged = $record['triagedByUserID'] ?? ($_POST['triagedByUserID'] ?? ''); ?>
+                    <?php foreach ($users as $u): ?>
                         <option value="<?= (int)$u['userID'] ?>" <?= (string)$currentTriaged === (string)$u['userID'] ? 'selected' : '' ?>><?= e($u['fullName']) ?></option>
                     <?php endforeach; ?>
                 </select>
@@ -280,20 +264,16 @@ require __DIR__ . '/../../includes/header.php';
             </div>
 
             <div class="col-md-4">
-                <label for="closedDate" class="form-label">Closed Date</label>
-                <input type="date" class="form-control bg-dark text-light border-secondary" id="closedDate" name="closedDate"
-                       value="<?= e($record['closedDate'] ?? ($_POST['closedDate'] ?? '')) ?>">
-                <div class="form-text text-secondary small">Auto-filled when status is set to Remediated or Verified Closed.</div>
-            </div>
-
-            <div class="col-md-4">
-                <!-- Spacer for layout alignment -->
+                <label class="form-label">Closed Date</label>
+                <input type="text" class="form-control bg-dark text-light border-secondary" value="<?= e($record['closedDate'] ?? 'Open') ?>" readonly>
+                <div class="form-text text-secondary small">Set by the server only for Verified Closed or Risk Accepted states.</div>
             </div>
 
             <div class="col-12">
                 <label for="notes" class="form-label">Notes</label>
                 <textarea class="form-control bg-dark text-light border-secondary" id="notes" name="notes"
-                          rows="4" placeholder="Additional notes, context, or justification..."><?= e($record['notes'] ?? ($_POST['notes'] ?? '')) ?></textarea>
+                          rows="4" placeholder="Evidence, triage notes, or risk-acceptance justification..."><?= e($record['notes'] ?? ($_POST['notes'] ?? '')) ?></textarea>
+                <div class="form-text text-secondary small">Risk acceptance requires a justification.</div>
             </div>
         </div>
 
