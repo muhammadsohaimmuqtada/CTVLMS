@@ -46,10 +46,13 @@ function hasVerifiedRemediation(PDO $db, int $assetVulnID): bool
 {
     $stmt = $db->prepare(
         'SELECT COUNT(*)
-         FROM remediations
-         WHERE assetVulnID = :id
-           AND verifiedByUserID IS NOT NULL
-           AND verificationDate IS NOT NULL'
+         FROM remediations r
+         LEFT JOIN remediation_verifications rv ON rv.remediationID = r.remediationID
+         WHERE r.assetVulnID = :id
+           AND (
+                (r.verifiedByUserID IS NOT NULL AND r.verificationDate IS NOT NULL)
+                OR rv.verificationID IS NOT NULL
+           )'
     );
     $stmt->execute([':id' => $assetVulnID]);
     return (int)$stmt->fetchColumn() > 0;
@@ -83,7 +86,7 @@ function validateLifecycleTransition(PDO $db, int $assetVulnID, string $oldStatu
     }
 
     if ($newStatus === 'Verified_Closed' && !hasVerifiedRemediation($db, $assetVulnID)) {
-        return 'Verified closure requires a remediation that was explicitly verified by an authorised verifier.';
+        return 'Verified closure requires a remediation that was explicitly verified by an authorised human or automated verification workflow.';
     }
 
     return null;
