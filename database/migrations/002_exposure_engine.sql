@@ -102,6 +102,16 @@ CREATE TABLE IF NOT EXISTS asset_patch_policies (
     FOREIGN KEY (assetID) REFERENCES assets(assetID) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS asset_backup_evidence (
+    assetID INT PRIMARY KEY,
+    source VARCHAR(100) NOT NULL,
+    referenceValue VARCHAR(255),
+    lastVerifiedAt DATETIME NOT NULL,
+    validUntil DATETIME,
+    FOREIGN KEY (assetID) REFERENCES assets(assetID) ON DELETE CASCADE,
+    INDEX idx_backup_validity (validUntil)
+);
+
 CREATE TABLE IF NOT EXISTS remediation_jobs (
     jobID BIGINT AUTO_INCREMENT PRIMARY KEY,
     exposureID BIGINT NOT NULL,
