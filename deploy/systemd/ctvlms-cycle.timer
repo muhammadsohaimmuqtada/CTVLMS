@@ -1,0 +1,12 @@
+[Unit]
+Description=Run CTVLMS exposure management every 10 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=10min
+Persistent=true
+RandomizedDelaySec=20
+Unit=ctvlms-cycle.service
+
+[Install]
+WantedBy=timers.target
