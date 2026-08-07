@@ -19,15 +19,9 @@ function runSsh(array $job, string $remoteCommand): array
     $user = (string)$job['sshUser'];
     $keyEnv = (string)$job['sshKeyEnv'];
 
-    if (!filter_var($ip, FILTER_VALIDATE_IP)) {
-        throw new RuntimeException('Patch target does not have a valid IP address.');
-    }
-    if (!preg_match('/^[A-Za-z0-9._-]+$/', $user)) {
-        throw new RuntimeException('Invalid SSH user configured for asset.');
-    }
-    if (!preg_match('/^[A-Z_][A-Z0-9_]*$/', $keyEnv)) {
-        throw new RuntimeException('SSH key environment reference is invalid.');
-    }
+    if (!filter_var($ip, FILTER_VALIDATE_IP)) throw new RuntimeException('Patch target does not have a valid IP address.');
+    if (!preg_match('/^[A-Za-z0-9._-]+$/', $user)) throw new RuntimeException('Invalid SSH user configured for asset.');
+    if (!preg_match('/^[A-Z_][A-Z0-9_]*$/', $keyEnv)) throw new RuntimeException('SSH key environment reference is invalid.');
 
     $keyPath = trim((string)getenv($keyEnv));
     if ($keyPath === '' || !is_file($keyPath)) {
@@ -35,8 +29,7 @@ function runSsh(array $job, string $remoteCommand): array
     }
 
     $cmd = [
-        'ssh',
-        '-i', $keyPath,
+        'ssh', '-i', $keyPath,
         '-o', 'BatchMode=yes',
         '-o', 'ConnectTimeout=10',
         '-o', 'StrictHostKeyChecking=yes',
@@ -44,15 +37,9 @@ function runSsh(array $job, string $remoteCommand): array
         $remoteCommand,
     ];
 
-    $descriptor = [
-        0 => ['pipe', 'r'],
-        1 => ['pipe', 'w'],
-        2 => ['pipe', 'w'],
-    ];
+    $descriptor = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
     $proc = proc_open($cmd, $descriptor, $pipes);
-    if (!is_resource($proc)) {
-        throw new RuntimeException('Unable to launch SSH client.');
-    }
+    if (!is_resource($proc)) throw new RuntimeException('Unable to launch SSH client.');
 
     fclose($pipes[0]);
     $stdout = stream_get_contents($pipes[1]);
@@ -96,11 +83,14 @@ $db->beginTransaction();
 try {
     $stmt = $db->query(
         "SELECT j.*, a.ipAddress, p.mode, p.transport, p.sshUser, p.sshKeyEnv,
-                p.requireVerifiedBackup, s.version AS inventoryVersion
+                p.requireVerifiedBackup, s.version AS inventoryVersion,
+                av.assetVulnID, av.status AS lifecycleStatus
          FROM remediation_jobs j
          JOIN assets a ON a.assetID = j.assetID
          JOIN asset_patch_policies p ON p.assetID = j.assetID
          JOIN asset_software s ON s.softwareID = j.softwareID
+         JOIN exposure_matches e ON e.exposureID = j.exposureID
+         JOIN asset_vulnerabilities av ON av.assetID = e.assetID AND av.vulnID = e.vulnID
          WHERE j.status IN ('Queued','Approved')
          ORDER BY j.requestedAt ASC
          LIMIT 1
@@ -114,12 +104,8 @@ try {
         exit(0);
     }
 
-    if ($job['status'] === 'Queued' && $job['mode'] !== 'Auto') {
-        throw new RuntimeException('Queued job is not permitted by current Auto policy.');
-    }
-    if ($job['transport'] !== 'SSH') {
-        throw new RuntimeException('This worker currently supports SSH-managed assets only.');
-    }
+    if ($job['status'] === 'Queued' && $job['mode'] !== 'Auto') throw new RuntimeException('Queued job is not permitted by current Auto policy.');
+    if ($job['transport'] !== 'SSH') throw new RuntimeException('This worker currently supports SSH-managed assets only.');
     if ((bool)$job['requireVerifiedBackup'] && !assetHasValidBackupEvidence($db, (int)$job['assetID'])) {
         throw new RuntimeException('Verified backup evidence is required before patch execution.');
     }
@@ -130,8 +116,24 @@ try {
          WHERE jobID = :id"
     );
     $claim->execute([':id' => $job['jobID']]);
+
     $markExposure = $db->prepare("UPDATE exposure_matches SET status = 'Remediating' WHERE exposureID = :id");
     $markExposure->execute([':id' => $job['exposureID']]);
+
+    // Automated CPE evidence performs triage/confirmation before remediation.
+    if (in_array($job['lifecycleStatus'], ['Discovered', 'Triaged'], true)) {
+        $confirm = $db->prepare("UPDATE asset_vulnerabilities SET status = 'Confirmed' WHERE assetVulnID = :id");
+        $confirm->execute([':id' => $job['assetVulnID']]);
+        logAction('STATUS_CHANGE', 'asset_vulnerabilities', (int)$job['assetVulnID'], 'Automated evidence confirmed exposure');
+    }
+    $progress = $db->prepare(
+        "UPDATE asset_vulnerabilities
+         SET status = 'Remediation_In_Progress'
+         WHERE assetVulnID = :id AND status = 'Confirmed'"
+    );
+    $progress->execute([':id' => $job['assetVulnID']]);
+    logAction('STATUS_CHANGE', 'asset_vulnerabilities', (int)$job['assetVulnID'], 'Automated remediation started');
+
     $db->commit();
 } catch (Throwable $ex) {
     if ($db->inTransaction()) $db->rollBack();
@@ -173,37 +175,49 @@ try {
     ], JSON_UNESCAPED_SLASHES);
 
     $db->beginTransaction();
+
+    $remediation = $db->prepare(
+        "INSERT INTO remediations
+            (assetVulnID, actionTaken, remediationType, startedDate, completedDate)
+         VALUES (:assetVuln, :action, 'Patch', CURDATE(), CURDATE())"
+    );
+    $remediation->execute([
+        ':assetVuln' => $job['assetVulnID'],
+        ':action' => "CTVLMS automatic package upgrade: {$job['packageName']} {$beforeVersion} → {$afterVersion}",
+    ]);
+    $remediationID = (int)$db->lastInsertId();
+
     $finish = $db->prepare(
         "UPDATE remediation_jobs
-         SET status = 'Succeeded', fromVersion = :before, targetVersion = :after,
+         SET status = 'Succeeded', remediationID = :remediation,
+             fromVersion = :before, targetVersion = :after,
              completedAt = CURRENT_TIMESTAMP, verificationEvidence = :evidence
          WHERE jobID = :id"
     );
     $finish->execute([
+        ':remediation' => $remediationID,
         ':before' => $beforeVersion,
         ':after' => $afterVersion,
         ':evidence' => $evidence,
         ':id' => $job['jobID'],
     ]);
 
-    $software = $db->prepare(
-        'UPDATE asset_software SET version = :version, lastSeen = CURRENT_TIMESTAMP WHERE softwareID = :id'
-    );
+    $software = $db->prepare('UPDATE asset_software SET version = :version, lastSeen = CURRENT_TIMESTAMP WHERE softwareID = :id');
     $software->execute([':version' => $afterVersion, ':id' => $job['softwareID']]);
 
     $exposure = $db->prepare("UPDATE exposure_matches SET status = 'Remediated' WHERE exposureID = :id");
     $exposure->execute([':id' => $job['exposureID']]);
 
     $lifecycle = $db->prepare(
-        "UPDATE asset_vulnerabilities av
-         JOIN exposure_matches e ON e.assetID = av.assetID AND e.vulnID = av.vulnID
-         SET av.status = 'Remediated'
-         WHERE e.exposureID = :exposure
-           AND av.status IN ('Confirmed','Remediation_In_Progress')"
+        "UPDATE asset_vulnerabilities
+         SET status = 'Remediated'
+         WHERE assetVulnID = :id AND status = 'Remediation_In_Progress'"
     );
-    $lifecycle->execute([':exposure' => $job['exposureID']]);
+    $lifecycle->execute([':id' => $job['assetVulnID']]);
 
+    logAction('CREATE', 'remediations', $remediationID, 'Created from automatic patch job #' . $job['jobID']);
     logAction('AUTO_PATCH', 'remediation_jobs', (int)$job['jobID'], "Upgraded {$job['packageName']} {$beforeVersion} → {$afterVersion}");
+    logAction('STATUS_CHANGE', 'asset_vulnerabilities', (int)$job['assetVulnID'], 'Status: Remediation_In_Progress → Remediated');
     $db->commit();
 
     echo "Patched job #{$job['jobID']}: {$job['packageName']} {$beforeVersion} -> {$afterVersion}\n";
@@ -218,6 +232,11 @@ try {
     $fail->execute([':error' => $ex->getMessage(), ':id' => $job['jobID']]);
     $restore = $db->prepare("UPDATE exposure_matches SET status = 'Confirmed' WHERE exposureID = :id");
     $restore->execute([':id' => $job['exposureID']]);
+    $restoreLifecycle = $db->prepare(
+        "UPDATE asset_vulnerabilities SET status = 'Confirmed'
+         WHERE assetVulnID = :id AND status = 'Remediation_In_Progress'"
+    );
+    $restoreLifecycle->execute([':id' => $job['assetVulnID']]);
     logAction('PATCH_FAILED', 'remediation_jobs', (int)$job['jobID'], $ex->getMessage());
 
     fwrite(STDERR, "Patch job #{$job['jobID']} failed: {$ex->getMessage()}\n");
