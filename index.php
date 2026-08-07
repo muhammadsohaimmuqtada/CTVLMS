@@ -47,9 +47,10 @@ $routes = [
     // Assets
     'assets/list'          => 'pages/assets/list.php',
     'assets/form'          => 'pages/assets/form.php',
-    // Vulnerabilities
+    // Vulnerabilities and exposure intelligence
     'vulnerabilities/list' => 'pages/vulnerabilities/list.php',
     'vulnerabilities/form' => 'pages/vulnerabilities/form.php',
+    'exposures/list'       => 'pages/exposures/list.php',
     // Asset-Vulnerability Lifecycle
     'asset_vulns/list'     => 'pages/asset_vulns/list.php',
     'asset_vulns/form'     => 'pages/asset_vulns/form.php',
