@@ -1,149 +1,246 @@
 <?php
-// includes/sync_cve.php
-// Fetches live CVEs from the NIST NVD API 2.0
+/**
+ * CTVLMS — NVD CVE ingestion.
+ *
+ * Imports recently modified CVEs plus their CPE applicability ranges. The
+ * exposure engine consumes those ranges against observed asset inventory.
+ */
 
-function syncNistCVEs($db) {
-    // NVD API 2.0 can be slow/rate-limited without a key. 
-    // We'll fetch the most recently modified CVEs by using a recent date range.
-    $endDate = new DateTime('now', new DateTimeZone('UTC'));
-    $startDate = (clone $endDate)->modify('-2 days'); // Last 48 hours to minimize data volume
-    
-    $startStr = $startDate->format('Y-m-d\TH:i:s.000O');
-    $startStr = substr_replace($startStr, ':', -2, 0); // Format to Y-m-dTH:i:s.000+00:00
-    
-    $endStr = $endDate->format('Y-m-d\TH:i:s.000O');
-    $endStr = substr_replace($endStr, ':', -2, 0);
-
-    $url = "https://services.nvd.nist.gov/rest/json/cves/2.0?pubStartDate=" . urlencode($startStr) . "&pubEndDate=" . urlencode($endStr) . "&resultsPerPage=20";
-    
-    $options = [
-        "http" => [
-            "method" => "GET",
-            "header" => "User-Agent: CTVLMS-Student-Project/1.0\r\n" .
-                        "Accept: application/json\r\n",
-            "timeout" => 120, // NIST is extremely slow without an API key
-            "ignore_errors" => true
-        ]
+function nvdHttpGet(string $url): ?array
+{
+    $headers = [
+        'User-Agent: CTVLMS/2.0',
+        'Accept: application/json',
     ];
-    $maxRetries = 3;
-    $retryDelay = 2; // seconds
-    $json = false;
-    
-    for ($i = 0; $i <= $maxRetries; $i++) {
+    $apiKey = trim((string)getenv('NVD_API_KEY'));
+    if ($apiKey !== '') {
+        $headers[] = 'apiKey: ' . $apiKey;
+    }
+
+    $options = [
+        'http' => [
+            'method' => 'GET',
+            'header' => implode("\r\n", $headers) . "\r\n",
+            'timeout' => 30,
+            'ignore_errors' => true,
+        ],
+    ];
+
+    $delay = 2;
+    for ($attempt = 0; $attempt < 4; $attempt++) {
         $context = stream_context_create($options);
-        $json = @file_get_contents($url, false, $context);
-        
-        if (isset($http_response_header) && is_array($http_response_header)) {
-            $status_line = $http_response_header[0];
-            
-            // Check for success
-            if (strpos($status_line, '200') !== false && $json) {
-                break;
-            }
-            
-            // On 503 Service Unavailable or 403 Forbidden rate limits, back off and retry
-            if (strpos($status_line, '503') !== false || strpos($status_line, '403') !== false) {
-                if ($i < $maxRetries) {
-                    sleep($retryDelay);
-                    $retryDelay *= 2; // 2, 4, 8 seconds...
-                    continue;
-                }
-            }
+        $body = @file_get_contents($url, false, $context);
+        $status = $http_response_header[0] ?? '';
+
+        if ($body !== false && str_contains($status, '200')) {
+            $decoded = json_decode($body, true);
+            return is_array($decoded) ? $decoded : null;
         }
-        
-        // If we reach here and it's the last iteration, fail out
-        if ($i === $maxRetries) {
-            return false;
+
+        if ($attempt < 3 && (str_contains($status, '403') || str_contains($status, '429') || str_contains($status, '503'))) {
+            sleep($delay);
+            $delay *= 2;
+            continue;
         }
+        break;
     }
-    
-    $data = json_decode($json, true);
-    if (!isset($data['vulnerabilities'])) {
-        return false;
-    }
-    
-    $addedCount = 0;
-    
-    $stmt = $db->prepare('INSERT INTO vulnerabilities (cveID, title, description, cvssScore, severity, publishedDate) 
-                          VALUES (:cveID, :title, :description, :cvssScore, :severity, :publishedDate)
-                          ON DUPLICATE KEY UPDATE 
-                          title = VALUES(title), 
-                          description = VALUES(description), 
-                          cvssScore = VALUES(cvssScore), 
-                          severity = VALUES(severity)');
-    
-    foreach ($data['vulnerabilities'] as $item) {
-        $cve = $item['cve'];
-        $cveID = $cve['id'] ?? null;
-        if (!$cveID) continue;
-        
-        $desc = 'No description available';
-        if (isset($cve['descriptions']) && is_array($cve['descriptions'])) {
-            foreach ($cve['descriptions'] as $d) {
-                if ($d['lang'] === 'en') {
-                    $desc = $d['value'];
-                    break;
-                }
-            }
-        }
-        
-        // Create a reasonable title from the description
-        $title = (strlen($desc) > 80) ? substr($desc, 0, 77) . '...' : $desc;
-        
-        $cvssScore = null;
-        if (isset($cve['metrics']['cvssMetricV31'][0]['cvssData']['baseScore'])) {
-            $cvssScore = $cve['metrics']['cvssMetricV31'][0]['cvssData']['baseScore'];
-        } elseif (isset($cve['metrics']['cvssMetricV30'][0]['cvssData']['baseScore'])) {
-            $cvssScore = $cve['metrics']['cvssMetricV30'][0]['cvssData']['baseScore'];
-        } elseif (isset($cve['metrics']['cvssMetricV2'][0]['cvssData']['baseScore'])) {
-            $cvssScore = $cve['metrics']['cvssMetricV2'][0]['cvssData']['baseScore'];
-        }
-        
-        if ($cvssScore === null) {
-            $severity = 'Low'; // Default for missing CVSS
-        } else {
-            $severity = 'Low';
-            if ($cvssScore >= 9.0) $severity = 'Critical';
-            elseif ($cvssScore >= 7.0) $severity = 'High';
-            elseif ($cvssScore >= 4.0) $severity = 'Medium';
-        }
-        
-        $pubDate = null;
-        if (isset($cve['published'])) {
-            $pubDate = date('Y-m-d', strtotime($cve['published']));
-        }
-        
-        $stmt->execute([
-            ':cveID' => $cveID,
-            ':title' => $title,
-            ':description' => $desc,
-            ':cvssScore' => $cvssScore,
-            ':severity' => $severity,
-            ':publishedDate' => $pubDate
-        ]);
-        
-        if ($stmt->rowCount() > 0) {
-            $addedCount++;
-            $newId = $db->lastInsertId();
-            logAction('CREATE', 'vulnerabilities', $newId, "Synced from NIST API: $cveID");
-        }
-    }
-    
-    return $addedCount;
+
+    return null;
 }
 
-// Allow CLI execution
-if (php_sapi_name() === 'cli') {
+function nvdEnglishDescription(array $cve): string
+{
+    foreach (($cve['descriptions'] ?? []) as $description) {
+        if (($description['lang'] ?? '') === 'en') {
+            return trim((string)($description['value'] ?? '')) ?: 'No description available';
+        }
+    }
+    return 'No description available';
+}
+
+function nvdCvss(array $cve): array
+{
+    $paths = ['cvssMetricV40', 'cvssMetricV31', 'cvssMetricV30', 'cvssMetricV2'];
+    foreach ($paths as $path) {
+        $metric = $cve['metrics'][$path][0]['cvssData'] ?? null;
+        if (!is_array($metric) || !isset($metric['baseScore'])) continue;
+
+        $score = (float)$metric['baseScore'];
+        $severity = strtoupper((string)($metric['baseSeverity'] ?? ''));
+        if (!in_array($severity, ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'], true)) {
+            $severity = $score >= 9.0 ? 'CRITICAL' : ($score >= 7.0 ? 'HIGH' : ($score >= 4.0 ? 'MEDIUM' : 'LOW'));
+        }
+        return [$score, ucfirst(strtolower($severity))];
+    }
+    return [null, 'Low'];
+}
+
+/**
+ * Flatten NVD configuration trees while remembering when a match belongs to a
+ * compound/negated condition. Compound matches are deliberately treated as
+ * Potential by the correlation engine until all required conditions are known.
+ */
+function collectNvdCpeMatches(array $node, array &$out, bool $complex = false): void
+{
+    $operator = strtoupper((string)($node['operator'] ?? 'OR'));
+    $nodeComplex = $complex || $operator === 'AND' || !empty($node['negate']);
+
+    if (isset($node['cpeMatch']) && is_array($node['cpeMatch'])) {
+        foreach ($node['cpeMatch'] as $match) {
+            if (!is_array($match) || empty($match['criteria'])) continue;
+            $out[] = [
+                'criteria' => (string)$match['criteria'],
+                'vulnerable' => !empty($match['vulnerable']) ? 1 : 0,
+                'configurationComplex' => $nodeComplex ? 1 : 0,
+                'versionStartIncluding' => $match['versionStartIncluding'] ?? null,
+                'versionStartExcluding' => $match['versionStartExcluding'] ?? null,
+                'versionEndIncluding' => $match['versionEndIncluding'] ?? null,
+                'versionEndExcluding' => $match['versionEndExcluding'] ?? null,
+            ];
+        }
+    }
+
+    foreach (($node['nodes'] ?? []) as $child) {
+        if (is_array($child)) collectNvdCpeMatches($child, $out, $nodeComplex);
+    }
+}
+
+function extractNvdCpeMatches(array $cve): array
+{
+    $matches = [];
+    foreach (($cve['configurations'] ?? []) as $configuration) {
+        if (is_array($configuration)) collectNvdCpeMatches($configuration, $matches, false);
+    }
+    return $matches;
+}
+
+function syncNistCVEs(PDO $db): int|false
+{
+    $hours = max(1, min(168, (int)(getenv('NVD_SYNC_HOURS') ?: 6)));
+    $end = new DateTimeImmutable('now', new DateTimeZone('UTC'));
+    $start = $end->modify('-' . $hours . ' hours');
+
+    $baseParams = [
+        'lastModStartDate' => $start->format('Y-m-d\TH:i:s.000P'),
+        'lastModEndDate' => $end->format('Y-m-d\TH:i:s.000P'),
+        'resultsPerPage' => 200,
+    ];
+
+    $upsertVuln = $db->prepare(
+        'INSERT INTO vulnerabilities (cveID, title, description, cvssScore, severity, cwe, publishedDate)
+         VALUES (:cveID, :title, :description, :cvssScore, :severity, :cwe, :publishedDate)
+         ON DUPLICATE KEY UPDATE
+            title = VALUES(title),
+            description = VALUES(description),
+            cvssScore = VALUES(cvssScore),
+            severity = VALUES(severity),
+            cwe = VALUES(cwe),
+            publishedDate = VALUES(publishedDate)'
+    );
+    $findVuln = $db->prepare('SELECT vulnID FROM vulnerabilities WHERE cveID = :cveID LIMIT 1');
+    $clearCpes = $db->prepare('DELETE FROM vulnerability_cpe_matches WHERE vulnID = :vulnID AND source = \'NVD\'');
+    $insertCpe = $db->prepare(
+        'INSERT INTO vulnerability_cpe_matches
+            (vulnID, criteria, vulnerable, configurationComplex,
+             versionStartIncluding, versionStartExcluding, versionEndIncluding, versionEndExcluding, source)
+         VALUES
+            (:vulnID, :criteria, :vulnerable, :complex,
+             :vsi, :vse, :vei, :vee, \'NVD\')'
+    );
+
+    $processed = 0;
+    $startIndex = 0;
+    $total = null;
+
+    do {
+        $params = $baseParams;
+        $params['startIndex'] = $startIndex;
+        $url = 'https://services.nvd.nist.gov/rest/json/cves/2.0?' . http_build_query($params, '', '&', PHP_QUERY_RFC3986);
+        $page = nvdHttpGet($url);
+        if ($page === null || !isset($page['vulnerabilities'])) {
+            return $processed > 0 ? $processed : false;
+        }
+
+        $total = (int)($page['totalResults'] ?? count($page['vulnerabilities']));
+        foreach ($page['vulnerabilities'] as $item) {
+            $cve = $item['cve'] ?? null;
+            if (!is_array($cve) || empty($cve['id'])) continue;
+
+            $cveID = (string)$cve['id'];
+            $description = nvdEnglishDescription($cve);
+            $title = strlen($description) > 160 ? substr($description, 0, 157) . '...' : $description;
+            [$score, $severity] = nvdCvss($cve);
+
+            $cwe = null;
+            foreach (($cve['weaknesses'] ?? []) as $weakness) {
+                foreach (($weakness['description'] ?? []) as $desc) {
+                    $value = (string)($desc['value'] ?? '');
+                    if (preg_match('/^CWE-\d+$/', $value)) {
+                        $cwe = $value;
+                        break 2;
+                    }
+                }
+            }
+
+            $published = !empty($cve['published']) ? date('Y-m-d', strtotime($cve['published'])) : null;
+
+            $db->beginTransaction();
+            try {
+                $upsertVuln->execute([
+                    ':cveID' => $cveID,
+                    ':title' => $title,
+                    ':description' => $description,
+                    ':cvssScore' => $score,
+                    ':severity' => $severity,
+                    ':cwe' => $cwe,
+                    ':publishedDate' => $published,
+                ]);
+
+                $findVuln->execute([':cveID' => $cveID]);
+                $vulnID = (int)$findVuln->fetchColumn();
+                if ($vulnID <= 0) throw new RuntimeException('Unable to resolve imported CVE: ' . $cveID);
+
+                $clearCpes->execute([':vulnID' => $vulnID]);
+                foreach (extractNvdCpeMatches($cve) as $match) {
+                    $insertCpe->execute([
+                        ':vulnID' => $vulnID,
+                        ':criteria' => $match['criteria'],
+                        ':vulnerable' => $match['vulnerable'],
+                        ':complex' => $match['configurationComplex'],
+                        ':vsi' => $match['versionStartIncluding'],
+                        ':vse' => $match['versionStartExcluding'],
+                        ':vei' => $match['versionEndIncluding'],
+                        ':vee' => $match['versionEndExcluding'],
+                    ]);
+                }
+
+                $db->commit();
+                $processed++;
+            } catch (Throwable $ex) {
+                if ($db->inTransaction()) $db->rollBack();
+                throw $ex;
+            }
+        }
+
+        $received = count($page['vulnerabilities']);
+        $startIndex += $received;
+        if ($received === 0) break;
+    } while ($startIndex < $total);
+
+    logAction('SYNC', 'vulnerabilities', null, "NVD sync processed {$processed} recently modified CVEs");
+    return $processed;
+}
+
+if (php_sapi_name() === 'cli' && realpath($_SERVER['SCRIPT_FILENAME'] ?? '') === __FILE__) {
     require_once __DIR__ . '/../config/config.php';
     require_once __DIR__ . '/../config/database.php';
     require_once __DIR__ . '/audit.php';
-    
+
     $db = getDB();
-    echo "Syncing NIST CVEs (last 48 hours)...\n";
-    $added = syncNistCVEs($db);
-    if ($added === false) {
-        echo "Failed to fetch data from NIST API.\n";
-    } else {
-        echo "Added $added new vulnerabilities.\n";
+    $count = syncNistCVEs($db);
+    if ($count === false) {
+        fwrite(STDERR, "NVD synchronization failed.\n");
+        exit(1);
     }
+    echo "NVD synchronization processed {$count} CVEs.\n";
 }
