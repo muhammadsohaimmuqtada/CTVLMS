@@ -51,9 +51,12 @@ function versionWithinNvdRange(string $version, array $rule): bool
 
 /**
  * Evaluate one inventory CPE against one NVD CPE rule.
- * Compound NVD configurations are never auto-confirmed from a single CPE.
+ *
+ * $observedVersionOverride is used for package inventory where the CPE may
+ * intentionally keep a wildcard version while the package manager reports the
+ * authoritative installed version separately.
  */
-function evaluateCpeRule(string $inventoryCpe, array $rule): ?array
+function evaluateCpeRule(string $inventoryCpe, array $rule, ?string $observedVersionOverride = null): ?array
 {
     $observed = parseCpe23($inventoryCpe);
     $criteria = parseCpe23($rule['criteria'] ?? null);
@@ -65,7 +68,7 @@ function evaluateCpeRule(string $inventoryCpe, array $rule): ?array
         return null;
     }
 
-    $observedVersion = $observed['version'];
+    $observedVersion = cpeVersionKnown($observedVersionOverride) ? $observedVersionOverride : $observed['version'];
     $criteriaVersion = $criteria['version'];
     $hasRange = !empty($rule['versionStartIncluding']) || !empty($rule['versionStartExcluding']) ||
                 !empty($rule['versionEndIncluding']) || !empty($rule['versionEndExcluding']);
@@ -179,7 +182,7 @@ function evaluateExposureInventory(PDO $db, ?int $assetID = null): array
         $candidateRules = $rulesByBase[cpeBaseKey($parsed)] ?? [];
 
         foreach ($candidateRules as $rule) {
-            $result = evaluateCpeRule($item['cpe'], $rule);
+            $result = evaluateCpeRule($item['cpe'], $rule, $item['version'] ?? null);
             if ($result === null) continue;
 
             $key = hash('sha256', implode('|', [
@@ -236,15 +239,28 @@ function evaluateExposureInventory(PDO $db, ?int $assetID = null): array
     ];
 }
 
+function assetHasValidBackupEvidence(PDO $db, int $assetID): bool
+{
+    $stmt = $db->prepare(
+        'SELECT 1
+         FROM asset_backup_evidence
+         WHERE assetID = :asset
+           AND (validUntil IS NULL OR validUntil >= CURRENT_TIMESTAMP)
+         LIMIT 1'
+    );
+    $stmt->execute([':asset' => $assetID]);
+    return (bool)$stmt->fetchColumn();
+}
+
 /**
  * Turn confirmed software exposures into package-specific remediation jobs.
- * No arbitrary command is stored or executed. Actual execution is performed by
- * a policy-gated worker that supports only known package managers.
+ * Auto mode is blocked when its policy requires backup evidence and none is
+ * valid. Approval mode may still create an Awaiting_Approval job for review.
  */
 function queueEligibleRemediationJobs(PDO $db, ?int $assetID = null): int
 {
     $sql = "SELECT e.exposureID, e.assetID, e.softwareID, s.packageManager, s.packageName, s.version,
-                   p.mode
+                   p.mode, p.requireVerifiedBackup
             FROM exposure_matches e
             JOIN asset_software s ON s.softwareID = e.softwareID
             JOIN asset_patch_policies p ON p.assetID = e.assetID
@@ -280,6 +296,12 @@ function queueEligibleRemediationJobs(PDO $db, ?int $assetID = null): int
     foreach ($rows as $row) {
         $exists->execute([':exposure' => $row['exposureID']]);
         if ($exists->fetchColumn()) continue;
+
+        if ($row['mode'] === 'Auto' && (bool)$row['requireVerifiedBackup'] && !assetHasValidBackupEvidence($db, (int)$row['assetID'])) {
+            // Leave exposure Confirmed. Once backup evidence is registered the
+            // next cycle can safely create the automatic job.
+            continue;
+        }
 
         $status = $row['mode'] === 'Auto' ? 'Queued' : 'Awaiting_Approval';
         $insert->execute([
