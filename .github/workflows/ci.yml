@@ -1,0 +1,29 @@
+name: CTVLMS CI
+
+on:
+  push:
+    branches: [main, 'agent/**']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: PHP syntax
+        run: |
+          find . -type f -name '*.php' ! -name 'adminer.php' -print0 \
+            | xargs -0 -n1 php -l
+
+      - name: Lifecycle and exposure policy tests
+        run: php tests/v2_policy_test.php
+
+      - name: Python syntax
+        run: python3 -m py_compile test_app.py negative_tests.py
+
+      - name: Shell syntax
+        run: bash -n ctvlms.sh
