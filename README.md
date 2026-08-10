@@ -97,13 +97,26 @@ Never use seeded demo credentials or data in a shared deployment.
 
 ## Existing database upgrade
 
-Apply migrations in order. Current v3 deployments require migration `004` after the existing v2 migrations:
+Apply migrations in order. Current deployments require migrations `004` and `005` after the existing v2 migrations:
 
 ```bash
 mariadb -u root -p ctvlms < database/migrations/004_inventory_applicability.sql
+mariadb -u root -p ctvlms < database/migrations/005_nvd_sync_state.sql
 ```
 
-Migration `004` adds inventory freshness, authoritative asset facts/platform CPEs, and storage for full NVD configuration trees.
+Migration `004` adds inventory freshness, authoritative asset facts/platform CPEs, and storage for full NVD configuration trees. Migration `005` records whether each CVE has been refreshed through the full-configuration importer, so an older CVE that still needs backfill can be distinguished from an NVD record that legitimately has no applicability configuration.
+
+After upgrading an existing database, backfill old CVE rows in bounded batches:
+
+```bash
+php includes/sync_cve.php --backfill-missing 100
+```
+
+Repeat until `remaining_unknown` is `0`. For a specific CVE that must be refreshed immediately:
+
+```bash
+php includes/sync_cve.php --cve CVE-2026-3087
+```
 
 ## Managed endpoint inventory
 
@@ -128,9 +141,23 @@ php bin/continuous-cycle.php
 
 ## NVD intelligence
 
+Incremental maintenance uses recently modified CVEs:
+
 ```bash
 export NVD_SYNC_HOURS=24
 php includes/sync_cve.php
+```
+
+Refresh one or more known CVEs directly:
+
+```bash
+php includes/sync_cve.php --cve CVE-2026-3087 CVE-2026-0001
+```
+
+Backfill legacy rows whose full configuration state has not yet been populated:
+
+```bash
+php includes/sync_cve.php --backfill-missing 100
 ```
 
 An NVD API key is recommended for sustained use:
@@ -139,7 +166,7 @@ An NVD API key is recommended for sustained use:
 export NVD_API_KEY='...'
 ```
 
-CTVLMS stores both flattened CPE criteria for candidate indexing and the original NVD configuration JSON for compound applicability evaluation.
+CTVLMS stores both flattened CPE criteria for candidate indexing and the original NVD configuration JSON for compound applicability evaluation. Each refreshed vulnerability is also marked `Present` or `None` for NVD configuration state; untouched legacy rows remain `Unknown` until refreshed.
 
 ## Authorised network discovery
 
@@ -174,6 +201,7 @@ Local pure-policy/parser tests:
 php tests/v2_policy_test.php
 php tests/inventory_test.php
 php tests/nvd_parser_test.php
+php tests/remediation_policy_test.php
 ```
 
 GitHub Actions additionally boots MariaDB, applies the complete schema/migration chain, and executes database integration tests covering service freshness and compound applicability state changes.
