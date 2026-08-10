@@ -56,6 +56,7 @@ jobs:
           mariadb -h 127.0.0.1 -uroot ctvlms < database/migrations/002_exposure_engine.sql
           mariadb -h 127.0.0.1 -uroot ctvlms < database/migrations/003_remediation_verification.sql
           mariadb -h 127.0.0.1 -uroot ctvlms < database/migrations/004_inventory_applicability.sql
+          mariadb -h 127.0.0.1 -uroot ctvlms < database/migrations/005_nvd_sync_state.sql
       - name: Database integration tests
         run: php tests/integration_db_test.php
       - name: Python syntax

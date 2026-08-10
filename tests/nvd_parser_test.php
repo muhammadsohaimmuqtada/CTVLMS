@@ -18,4 +18,9 @@ c(count($matches) === 2, 'flatten preserves both vulnerable and environment crit
 c($matches[0]['configurationComplex'] === 1 && $matches[1]['configurationComplex'] === 1, 'AND marks criteria complex');
 c($matches[0]['matchCriteriaId'] === '11111111-1111-1111-1111-111111111111', 'matchCriteriaId preserved');
 c($matches[1]['vulnerable'] === 0, 'vulnerable=false environment prerequisite preserved');
+$ids = normalizeNvdCveIds(['cve-2026-3087', 'CVE-2026-3087', 'CVE-2025-12345']);
+c($ids === ['CVE-2026-3087', 'CVE-2025-12345'], 'targeted CVE IDs normalize and deduplicate');
+$rejected = false;
+try { normalizeNvdCveIds(['CVE-2026-3087&x=1']); } catch (InvalidArgumentException) { $rejected = true; }
+c($rejected, 'targeted sync rejects malformed CVE IDs');
 echo "PASS: {$tests} NVD parser tests\n";
