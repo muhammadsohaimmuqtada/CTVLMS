@@ -11,16 +11,60 @@ permissions:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    services:
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_ROOT_PASSWORD: ci-root-password
+          MARIADB_DATABASE: ctvlms
+          MARIADB_USER: ctvlms_app
+          MARIADB_PASSWORD: ci-app-password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+
+    env:
+      CTVLMS_DB_HOST: 127.0.0.1
+      CTVLMS_DB_PORT: 3306
+      CTVLMS_DB_NAME: ctvlms
+      CTVLMS_DB_USER: ctvlms_app
+      CTVLMS_DB_PASSWORD: ci-app-password
+
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y php-mysql php-xml mariadb-client
+          cp config/config.example.php config/config.php
 
       - name: PHP syntax
         run: |
           find . -type f -name '*.php' ! -name 'adminer.php' -print0 \
             | xargs -0 -n1 php -l
 
-      - name: Lifecycle and exposure policy tests
-        run: php tests/v2_policy_test.php
+      - name: Policy and parser tests
+        run: |
+          php tests/v2_policy_test.php
+          php tests/inventory_test.php
+          php tests/nvd_parser_test.php
+
+      - name: Database schema and migrations
+        env:
+          MYSQL_PWD: ci-root-password
+        run: |
+          mariadb -h 127.0.0.1 -uroot < database/schema.sql
+          mariadb -h 127.0.0.1 -uroot ctvlms < database/migrations/002_exposure_engine.sql
+          mariadb -h 127.0.0.1 -uroot ctvlms < database/migrations/003_remediation_verification.sql
+          mariadb -h 127.0.0.1 -uroot ctvlms < database/migrations/004_inventory_applicability.sql
+
+      - name: Database integration tests
+        run: php tests/integration_db_test.php
 
       - name: Python syntax
         run: python3 -m py_compile test_app.py negative_tests.py

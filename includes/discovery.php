@@ -2,9 +2,8 @@
 /**
  * CTVLMS — Network discovery ingestion.
  *
- * Imports Nmap XML into the managed asset/service inventory. The importer never
- * trusts display names as identity; IPv4/IPv6 address is used to locate an
- * existing asset and service identity is asset + protocol + port.
+ * Imports Nmap XML into managed asset/service inventory and explicitly retires
+ * services that disappear from a later successful scan of the same host.
  */
 
 function importNmapXml(PDO $db, string $xml, string $target = 'manual-import'): array
@@ -17,20 +16,14 @@ function importNmapXml(PDO $db, string $xml, string $target = 'manual-import'): 
         throw new RuntimeException('Invalid Nmap XML: ' . implode('; ', $errors));
     }
 
-    $run = $db->prepare(
-        "INSERT INTO scan_runs (target, scanner, status)
-         VALUES (:target, 'nmap', 'Running')"
-    );
+    $run = $db->prepare("INSERT INTO scan_runs (target, scanner, status) VALUES (:target, 'nmap', 'Running')");
     $run->execute([':target' => $target]);
     $scanRunID = (int)$db->lastInsertId();
-
-    $hostCount = 0;
-    $serviceCount = 0;
+    $hostCount = $serviceCount = $retiredServiceCount = 0;
 
     try {
         foreach ($doc->host as $host) {
-            $status = (string)($host->status['state'] ?? '');
-            if ($status !== 'up') continue;
+            if ((string)($host->status['state'] ?? '') !== 'up') continue;
 
             $ip = null;
             foreach ($host->address as $address) {
@@ -42,107 +35,76 @@ function importNmapXml(PDO $db, string $xml, string $target = 'manual-import'): 
             }
             if (!$ip) continue;
 
-            $hostname = '';
-            if (isset($host->hostnames->hostname[0])) {
-                $hostname = trim((string)$host->hostnames->hostname[0]['name']);
-            }
+            $hostname = isset($host->hostnames->hostname[0]) ? trim((string)$host->hostnames->hostname[0]['name']) : '';
             $assetName = $hostname !== '' ? $hostname : $ip;
-
-            $osPlatform = null;
-            if (isset($host->os->osmatch[0])) {
-                $osPlatform = trim((string)$host->os->osmatch[0]['name']);
-            }
+            $osPlatform = isset($host->os->osmatch[0]) ? trim((string)$host->os->osmatch[0]['name']) : null;
 
             $find = $db->prepare('SELECT assetID FROM assets WHERE ipAddress = :ip LIMIT 1');
             $find->execute([':ip' => $ip]);
             $assetID = (int)($find->fetchColumn() ?: 0);
-
             if ($assetID <= 0) {
                 $insert = $db->prepare(
-                    "INSERT INTO assets
-                        (assetName, assetType, ipAddress, osPlatform, criticality, environment)
+                    "INSERT INTO assets (assetName, assetType, ipAddress, osPlatform, criticality, environment)
                      VALUES (:name, 'Network_Device', :ip, :os, 'Medium', 'Production')"
                 );
-                $insert->execute([
-                    ':name' => $assetName,
-                    ':ip' => $ip,
-                    ':os' => $osPlatform,
-                ]);
+                $insert->execute([':name'=>$assetName, ':ip'=>$ip, ':os'=>$osPlatform]);
                 $assetID = (int)$db->lastInsertId();
                 logAction('DISCOVER', 'assets', $assetID, 'Discovered by Nmap at ' . $ip);
             } else {
-                $update = $db->prepare(
-                    'UPDATE assets
-                     SET osPlatform = COALESCE(:os, osPlatform)
-                     WHERE assetID = :id'
-                );
-                $update->execute([':os' => $osPlatform, ':id' => $assetID]);
+                $db->prepare('UPDATE assets SET osPlatform = COALESCE(:os, osPlatform) WHERE assetID = :id')
+                    ->execute([':os'=>$osPlatform, ':id'=>$assetID]);
             }
-
             $hostCount++;
 
-            if (!isset($host->ports->port)) continue;
-            foreach ($host->ports->port as $port) {
-                $protocol = strtolower((string)$port['protocol']);
-                if (!in_array($protocol, ['tcp', 'udp'], true)) continue;
+            if (isset($host->ports->port)) {
+                foreach ($host->ports->port as $port) {
+                    $protocol = strtolower((string)$port['protocol']);
+                    if (!in_array($protocol, ['tcp','udp'], true)) continue;
+                    $portNo = (int)$port['portid'];
+                    if ($portNo < 1 || $portNo > 65535) continue;
 
-                $portNo = (int)$port['portid'];
-                if ($portNo < 1 || $portNo > 65535) continue;
+                    $state = isset($port->state) ? (string)$port->state['state'] : null;
+                    if ($state !== 'open') continue;
+                    $serviceName = isset($port->service) ? (string)$port->service['name'] : null;
+                    $product = isset($port->service) ? (string)$port->service['product'] : null;
+                    $version = isset($port->service) ? (string)$port->service['version'] : null;
+                    $cpe = isset($port->service->cpe[0]) ? trim((string)$port->service->cpe[0]) : null;
 
-                $state = isset($port->state) ? (string)$port->state['state'] : null;
-                $serviceName = isset($port->service) ? (string)$port->service['name'] : null;
-                $product = isset($port->service) ? (string)$port->service['product'] : null;
-                $version = isset($port->service) ? (string)$port->service['version'] : null;
-                $cpe = null;
-                if (isset($port->service->cpe[0])) {
-                    $cpe = trim((string)$port->service->cpe[0]);
+                    $service = $db->prepare(
+                        'INSERT INTO asset_services
+                            (assetID, protocol, port, state, serviceName, product, version, cpe, isActive, lastSeenScanRunID)
+                         VALUES (:asset, :protocol, :port, :state, :name, :product, :version, :cpe, 1, :scan)
+                         ON DUPLICATE KEY UPDATE
+                            state=VALUES(state), serviceName=VALUES(serviceName), product=VALUES(product),
+                            version=VALUES(version), cpe=VALUES(cpe), isActive=1,
+                            lastSeen=CURRENT_TIMESTAMP, lastSeenScanRunID=VALUES(lastSeenScanRunID)'
+                    );
+                    $service->execute([
+                        ':asset'=>$assetID, ':protocol'=>$protocol, ':port'=>$portNo, ':state'=>'open',
+                        ':name'=>$serviceName ?: null, ':product'=>$product ?: null, ':version'=>$version ?: null,
+                        ':cpe'=>$cpe ?: null, ':scan'=>$scanRunID,
+                    ]);
+                    $serviceCount++;
                 }
-
-                $service = $db->prepare(
-                    'INSERT INTO asset_services
-                        (assetID, protocol, port, state, serviceName, product, version, cpe)
-                     VALUES (:asset, :protocol, :port, :state, :name, :product, :version, :cpe)
-                     ON DUPLICATE KEY UPDATE
-                        state = VALUES(state),
-                        serviceName = VALUES(serviceName),
-                        product = VALUES(product),
-                        version = VALUES(version),
-                        cpe = VALUES(cpe),
-                        lastSeen = CURRENT_TIMESTAMP'
-                );
-                $service->execute([
-                    ':asset' => $assetID,
-                    ':protocol' => $protocol,
-                    ':port' => $portNo,
-                    ':state' => $state ?: null,
-                    ':name' => $serviceName ?: null,
-                    ':product' => $product ?: null,
-                    ':version' => $version ?: null,
-                    ':cpe' => $cpe ?: null,
-                ]);
-                $serviceCount++;
             }
+
+            $retire = $db->prepare(
+                'UPDATE asset_services
+                 SET isActive = 0
+                 WHERE assetID = :asset AND isActive = 1
+                   AND (lastSeenScanRunID IS NULL OR lastSeenScanRunID <> :scan)'
+            );
+            $retire->execute([':asset'=>$assetID, ':scan'=>$scanRunID]);
+            $retiredServiceCount += $retire->rowCount();
         }
 
-        $finish = $db->prepare(
-            "UPDATE scan_runs
-             SET status = 'Succeeded', hostsObserved = :hosts, completedAt = CURRENT_TIMESTAMP
-             WHERE scanRunID = :id"
-        );
-        $finish->execute([':hosts' => $hostCount, ':id' => $scanRunID]);
+        $db->prepare("UPDATE scan_runs SET status='Succeeded', hostsObserved=:hosts, completedAt=CURRENT_TIMESTAMP WHERE scanRunID=:id")
+            ->execute([':hosts'=>$hostCount, ':id'=>$scanRunID]);
     } catch (Throwable $ex) {
-        $fail = $db->prepare(
-            "UPDATE scan_runs
-             SET status = 'Failed', completedAt = CURRENT_TIMESTAMP, errorMessage = :error
-             WHERE scanRunID = :id"
-        );
-        $fail->execute([':error' => $ex->getMessage(), ':id' => $scanRunID]);
+        $db->prepare("UPDATE scan_runs SET status='Failed', completedAt=CURRENT_TIMESTAMP, errorMessage=:error WHERE scanRunID=:id")
+            ->execute([':error'=>$ex->getMessage(), ':id'=>$scanRunID]);
         throw $ex;
     }
 
-    return [
-        'scan_run_id' => $scanRunID,
-        'hosts' => $hostCount,
-        'services' => $serviceCount,
-    ];
+    return ['scan_run_id'=>$scanRunID, 'hosts'=>$hostCount, 'services'=>$serviceCount, 'services_retired'=>$retiredServiceCount];
 }

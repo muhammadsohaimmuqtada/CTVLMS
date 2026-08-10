@@ -1,19 +1,20 @@
 services:
   db:
     image: mariadb:11
-    container_name: ctvlms-db
     restart: unless-stopped
     environment:
-      MARIADB_ROOT_PASSWORD: ${CTVLMS_DB_ROOT_PASSWORD:-ctvlms_local_only_change_me}
-      MARIADB_DATABASE: ctvlms
+      MARIADB_ROOT_PASSWORD: ${CTVLMS_DB_ROOT_PASSWORD:?Set CTVLMS_DB_ROOT_PASSWORD in .env}
+      MARIADB_DATABASE: ${CTVLMS_DB_NAME:-ctvlms}
+      MARIADB_USER: ${CTVLMS_DB_USER:-ctvlms_app}
+      MARIADB_PASSWORD: ${CTVLMS_DB_PASSWORD:?Set CTVLMS_DB_PASSWORD in .env}
     ports:
-      - "127.0.0.1:3306:3306"
+      - "127.0.0.1:${CTVLMS_DB_PORT:-3306}:3306"
     volumes:
       - db_data:/var/lib/mysql
       - ./database/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
-      - ./database/seed.sql:/docker-entrypoint-initdb.d/02-seed.sql:ro
-      - ./database/migrations/002_exposure_engine.sql:/docker-entrypoint-initdb.d/03-exposure-engine.sql:ro
-      - ./database/migrations/003_remediation_verification.sql:/docker-entrypoint-initdb.d/04-remediation-verification.sql:ro
+      - ./database/migrations/002_exposure_engine.sql:/docker-entrypoint-initdb.d/02-exposure-engine.sql:ro
+      - ./database/migrations/003_remediation_verification.sql:/docker-entrypoint-initdb.d/03-remediation-verification.sql:ro
+      - ./database/migrations/004_inventory_applicability.sql:/docker-entrypoint-initdb.d/04-inventory-applicability.sql:ro
     healthcheck:
       test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
       interval: 10s
