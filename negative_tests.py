@@ -2,9 +2,17 @@ import requests
 import json
 from bs4 import BeautifulSoup
 import sys
+import os
 
 BASE_URL = 'http://localhost:8000'
 session = requests.Session()
+VIEWER_EMAIL = os.environ.get('CTVLMS_TEST_VIEWER_EMAIL')
+VIEWER_PASSWORD = os.environ.get('CTVLMS_TEST_VIEWER_PASSWORD')
+ADMIN_EMAIL = os.environ.get('CTVLMS_TEST_ADMIN_EMAIL')
+ADMIN_PASSWORD = os.environ.get('CTVLMS_TEST_ADMIN_PASSWORD')
+
+if not all([VIEWER_EMAIL, VIEWER_PASSWORD, ADMIN_EMAIL, ADMIN_PASSWORD]):
+    raise SystemExit('Set CTVLMS_TEST_VIEWER_EMAIL/PASSWORD and CTVLMS_TEST_ADMIN_EMAIL/PASSWORD.')
 
 results = []
 
@@ -24,7 +32,7 @@ def log_test(name, req, res_status, res_text):
 # 1. Login as Viewer
 resp = session.get(f"{BASE_URL}/?page=login")
 csrf = get_csrf(resp.text)
-resp_post = session.post(f"{BASE_URL}/?page=login", data={'csrf_token': csrf, 'email': 'viewer@ctvlms.local', 'password': 'Admin@123'}, allow_redirects=False)
+resp_post = session.post(f"{BASE_URL}/?page=login", data={'csrf_token': csrf, 'email': VIEWER_EMAIL, 'password': VIEWER_PASSWORD}, allow_redirects=False)
 
 # Test A: RBAC Bypass (Viewer tries to access Admin audit log)
 resp_rbac = session.get(f"{BASE_URL}/?page=audit_log/list", allow_redirects=False)
@@ -42,7 +50,7 @@ log_test("CSRF Rejection", "POST /?page=assets/list (csrf_token=invalid_token_12
 session.cookies.clear()
 resp = session.get(f"{BASE_URL}/?page=login")
 csrf = get_csrf(resp.text)
-session.post(f"{BASE_URL}/?page=login", data={'csrf_token': csrf, 'email': 'admin@ctvlms.local', 'password': 'Admin@123'}, allow_redirects=False)
+session.post(f"{BASE_URL}/?page=login", data={'csrf_token': csrf, 'email': ADMIN_EMAIL, 'password': ADMIN_PASSWORD}, allow_redirects=False)
 
 # Get form to get valid CSRF
 resp = session.get(f"{BASE_URL}/?page=asset_vulns/form&id=1")

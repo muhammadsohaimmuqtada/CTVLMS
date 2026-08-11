@@ -34,6 +34,8 @@ function localHostFacts(): array
         'os_id' => strtolower((string)($osRelease['ID'] ?? $family)),
         'os_name' => (string)($osRelease['PRETTY_NAME'] ?? PHP_OS),
         'os_version' => (string)($osRelease['VERSION_ID'] ?? ''),
+        'distribution_suite' => strtolower((string)($osRelease['VERSION_CODENAME'] ?? '')),
+        'distribution_id_like' => strtolower((string)($osRelease['ID_LIKE'] ?? '')),
         'architecture' => php_uname('m'),
         'kernel' => php_uname('r'),
         'package_manager' => is_executable('/usr/bin/dpkg-query') ? 'apt' : 'none',
@@ -56,10 +58,21 @@ function parseDpkgInventory(string $text): array
     foreach (preg_split('/\R/', $text) ?: [] as $line) {
         if ($line === '') continue;
         $parts = explode("\t", $line);
-        if (count($parts) < 3) continue;
-        [$package, $version, $arch] = array_map('trim', array_slice($parts, 0, 3));
+        if (count($parts) < 6) continue;
+        [$package, $version, $arch, $sourcePackage, $sourceVersion, $upstreamVersion] =
+            array_map('trim', array_slice($parts, 0, 6));
         if ($package === '' || $version === '') continue;
-        $packages[] = ['package' => $package, 'version' => $version, 'architecture' => $arch];
+        $packages[] = [
+            'binary_package' => $package,
+            'binary_version' => $version,
+            'architecture' => $arch,
+            'source_package' => $sourcePackage !== '' ? $sourcePackage : null,
+            'source_version' => $sourceVersion !== '' ? $sourceVersion : null,
+            'upstream_source_version' => $upstreamVersion !== '' ? $upstreamVersion : null,
+            'package_manager' => 'apt',
+            'inventory_source' => 'Local_dpkg',
+            'is_active' => true,
+        ];
     }
     return $packages;
 }
@@ -80,7 +93,10 @@ function runCommand(array $command): array
 function collectDpkgPackages(): array
 {
     if (!is_executable('/usr/bin/dpkg-query')) return [];
-    $result = runCommand(['/usr/bin/dpkg-query', '-W', '-f=${binary:Package}\t${Version}\t${Architecture}\n']);
+    $result = runCommand([
+        '/usr/bin/dpkg-query', '-W',
+        '-f=${binary:Package}\t${Version}\t${Architecture}\t${source:Package}\t${source:Version}\t${source:Upstream-Version}\n',
+    ]);
     if ($result['exit'] !== 0) throw new RuntimeException('dpkg-query failed: ' . trim($result['stderr']));
     return parseDpkgInventory($result['stdout']);
 }
@@ -121,15 +137,38 @@ function collectLocalInventory(PDO $db, int $assetID): array
         if ($packages) {
             $db->prepare("UPDATE asset_software SET isActive = 0 WHERE assetID = :asset AND source = 'Agent'")
                 ->execute([':asset' => $assetID]);
+            $db->prepare("UPDATE asset_package_inventory SET isActive = 0 WHERE assetID = :asset AND inventorySource = 'Local_dpkg'")
+                ->execute([':asset' => $assetID]);
             $insert = $db->prepare(
                 "INSERT INTO asset_software
                     (assetID, vendor, product, version, cpe, packageManager, packageName, source, isActive)
                  VALUES (:asset, NULL, :product, :version, NULL, 'apt', :package, 'Agent', 1)
-                 ON DUPLICATE KEY UPDATE isActive = 1, lastSeen = CURRENT_TIMESTAMP"
+                 ON DUPLICATE KEY UPDATE softwareID=LAST_INSERT_ID(softwareID), isActive = 1, lastSeen = CURRENT_TIMESTAMP"
+            );
+            $insertIdentity = $db->prepare(
+                "INSERT INTO asset_package_inventory
+                    (softwareID,assetID,binaryPackage,binaryVersion,architecture,sourcePackage,sourceVersion,
+                     upstreamSourceVersion,packageManager,inventorySource,identityAuthoritative,isActive)
+                 VALUES
+                    (:software,:asset,:binary,:binary_version,:architecture,:source_package,:source_version,
+                     :upstream_version,'apt','Local_dpkg',1,1)
+                 ON DUPLICATE KEY UPDATE
+                    softwareID=VALUES(softwareID), binaryVersion=VALUES(binaryVersion),
+                    sourcePackage=VALUES(sourcePackage), sourceVersion=VALUES(sourceVersion),
+                    upstreamSourceVersion=VALUES(upstreamSourceVersion), identityAuthoritative=1,
+                    isActive=1, lastSeen=CURRENT_TIMESTAMP"
             );
             foreach ($packages as $package) {
                 $insert->execute([
-                    ':asset'=>$assetID, ':product'=>$package['package'], ':version'=>$package['version'], ':package'=>$package['package'],
+                    ':asset'=>$assetID, ':product'=>$package['binary_package'],
+                    ':version'=>$package['binary_version'], ':package'=>$package['binary_package'],
+                ]);
+                $softwareID = (int)$db->lastInsertId();
+                $insertIdentity->execute([
+                    ':software'=>$softwareID, ':asset'=>$assetID, ':binary'=>$package['binary_package'],
+                    ':binary_version'=>$package['binary_version'], ':architecture'=>$package['architecture'],
+                    ':source_package'=>$package['source_package'], ':source_version'=>$package['source_version'],
+                    ':upstream_version'=>$package['upstream_source_version'],
                 ]);
             }
         }

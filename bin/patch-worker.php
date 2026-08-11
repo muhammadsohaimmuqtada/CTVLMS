@@ -28,18 +28,29 @@ $db->beginTransaction();
 try {
     $stmt=$db->query(
         "SELECT j.*,a.ipAddress,p.mode,p.transport,p.sshUser,p.sshKeyEnv,p.requireVerifiedBackup,
-                s.version AS inventoryVersion,av.assetVulnID,av.status AS lifecycleStatus
+                s.version AS inventoryVersion,e.matchType,av.assetVulnID,av.status AS lifecycleStatus,
+                pi.identityAuthoritative,pi.binaryPackage,pi.packageManager AS identityPackageManager
          FROM remediation_jobs j
          JOIN assets a ON a.assetID=j.assetID
          JOIN asset_patch_policies p ON p.assetID=j.assetID
          JOIN asset_software s ON s.softwareID=j.softwareID AND s.isActive=1
          JOIN exposure_matches e ON e.exposureID=j.exposureID AND e.status='Remediation_Queued'
+         LEFT JOIN asset_package_inventory pi ON pi.softwareID=s.softwareID AND pi.isActive=1
+         LEFT JOIN package_exposure_advisories pea ON pea.exposureID=e.exposureID
+         LEFT JOIN distribution_advisories da ON da.advisoryID=pea.advisoryID
          JOIN asset_vulnerabilities av ON av.assetID=e.assetID AND av.vulnID=e.vulnID
-         WHERE j.status IN ('Queued','Approved') ORDER BY j.requestedAt ASC LIMIT 1 FOR UPDATE"
+         WHERE j.status IN ('Queued','Approved')
+           AND (e.matchType<>'Package_Advisory' OR da.advisoryID IS NOT NULL)
+         ORDER BY j.requestedAt ASC LIMIT 1 FOR UPDATE"
     );
     $job=$stmt->fetch();
     if (!$job) { $db->commit(); echo "No executable remediation jobs.\n"; exit(0); }
     validatePackageName((string)$job['packageName']);
+    if ($job['matchType']==='Package_Advisory' &&
+        (!(bool)$job['identityAuthoritative'] || $job['binaryPackage']!==$job['packageName'] ||
+         $job['identityPackageManager']!==$job['packageManager'])) {
+        throw new RuntimeException('Authoritative package identity is required for package-advisory remediation.');
+    }
     if ($job['status']==='Queued' && $job['mode']!=='Auto') throw new RuntimeException('Queued job is not permitted by current Auto policy.');
     if ($job['transport']!=='SSH') throw new RuntimeException('This worker currently supports SSH-managed assets only.');
     if ((bool)$job['requireVerifiedBackup'] && !assetHasValidBackupEvidence($db,(int)$job['assetID'])) throw new RuntimeException('Verified backup evidence is required before patch execution.');

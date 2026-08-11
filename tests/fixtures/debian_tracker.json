@@ -1,0 +1,35 @@
+{
+  "jq": {
+    "CVE-2099-1001": {
+      "description": "Deterministic fixed-version fixture.",
+      "releases": {
+        "bullseye": {"status": "resolved", "fixed_version": "1.6-1", "urgency": "high"},
+        "sid": {"status": "resolved", "fixed_version": "1.6-1", "urgency": "high"}
+      }
+    },
+    "CVE-2099-1002": {
+      "description": "Deterministic already-fixed fixture.",
+      "releases": {
+        "bullseye": {"status": "resolved", "fixed_version": "1.0-1", "urgency": "low"}
+      }
+    },
+    "CVE-2099-1003": {
+      "description": "Deterministic open fixture.",
+      "releases": {
+        "bullseye": {"status": "open", "fixed_version": "", "urgency": "medium"}
+      }
+    },
+    "CVE-2099-1004": {
+      "description": "Deterministic not-affected fixture.",
+      "releases": {
+        "bullseye": {"status": "resolved", "fixed_version": "0", "urgency": "unimportant"}
+      }
+    },
+    "CVE-2099-1005": {
+      "description": "Deterministic unknown fixture.",
+      "releases": {
+        "bullseye": {"status": "undetermined", "fixed_version": "", "urgency": "not yet assigned"}
+      }
+    }
+  }
+}

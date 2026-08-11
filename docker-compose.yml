@@ -16,6 +16,7 @@ services:
       - ./database/migrations/003_remediation_verification.sql:/docker-entrypoint-initdb.d/03-remediation-verification.sql:ro
       - ./database/migrations/004_inventory_applicability.sql:/docker-entrypoint-initdb.d/04-inventory-applicability.sql:ro
       - ./database/migrations/005_nvd_sync_state.sql:/docker-entrypoint-initdb.d/05-nvd-sync-state.sql:ro
+      - ./database/migrations/006_package_intelligence.sql:/docker-entrypoint-initdb.d/06-package-intelligence.sql:ro
     healthcheck:
       test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
       interval: 10s

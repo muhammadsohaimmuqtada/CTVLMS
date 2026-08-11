@@ -34,6 +34,7 @@ $summary = [
     'local_inventory'=>[],
     'scans'=>[],
     'correlation'=>null,
+    'package_correlation'=>null,
     'jobs_queued'=>0,
     'patches'=>[],
     'verification'=>null,
@@ -63,6 +64,7 @@ foreach ($targets as $target) {
 }
 
 $summary['correlation'] = evaluateExposureInventory($db);
+$summary['package_correlation'] = evaluatePackageAdvisories($db);
 $summary['jobs_queued'] = queueEligibleRemediationJobs($db);
 
 if (getenv('CTVLMS_EXECUTE_PATCHES') === '1') {

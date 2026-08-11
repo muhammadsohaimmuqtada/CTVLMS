@@ -2,9 +2,12 @@ import requests
 import re
 import sys
 import time
+import os
 from bs4 import BeautifulSoup
 
 BASE_URL = 'http://localhost:8000'
+ADMIN_EMAIL = os.environ.get('CTVLMS_TEST_ADMIN_EMAIL')
+ADMIN_PASSWORD = os.environ.get('CTVLMS_TEST_ADMIN_PASSWORD')
 session = requests.Session()
 
 def get_csrf_token(html):
@@ -29,8 +32,8 @@ def test_login():
     # Attempt login
     login_data = {
         'csrf_token': csrf_token,
-        'email': 'admin@ctvlms.local',
-        'password': 'Admin@123'
+        'email': ADMIN_EMAIL,
+        'password': ADMIN_PASSWORD
     }
     
     # Use allow_redirects=False to catch the redirect to dashboard
@@ -58,6 +61,9 @@ def test_page(page_name):
         return False
 
 def main():
+    if not ADMIN_EMAIL or not ADMIN_PASSWORD:
+        print('Set CTVLMS_TEST_ADMIN_EMAIL and CTVLMS_TEST_ADMIN_PASSWORD for live HTTP tests.')
+        sys.exit(2)
     # Wait for server to be up
     for _ in range(5):
         try:

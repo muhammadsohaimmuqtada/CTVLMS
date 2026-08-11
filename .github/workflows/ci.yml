@@ -46,6 +46,7 @@ jobs:
         run: |
           php tests/v2_policy_test.php
           php tests/inventory_test.php
+          php tests/package_intelligence_test.php
           php tests/nvd_parser_test.php
           php tests/remediation_policy_test.php
       - name: Database schema and migrations
@@ -53,13 +54,12 @@ jobs:
           MYSQL_PWD: ci-root-password
         run: |
           mariadb -h 127.0.0.1 -uroot < database/schema.sql
-          mariadb -h 127.0.0.1 -uroot ctvlms < database/migrations/002_exposure_engine.sql
-          mariadb -h 127.0.0.1 -uroot ctvlms < database/migrations/003_remediation_verification.sql
-          mariadb -h 127.0.0.1 -uroot ctvlms < database/migrations/004_inventory_applicability.sql
-          mariadb -h 127.0.0.1 -uroot ctvlms < database/migrations/005_nvd_sync_state.sql
+          for migration in database/migrations/*.sql; do
+            mariadb -h 127.0.0.1 -uroot ctvlms < "$migration"
+          done
       - name: Database integration tests
         run: php tests/integration_db_test.php
       - name: Python syntax
         run: python3 -m py_compile test_app.py negative_tests.py
       - name: Shell syntax
-        run: bash -n ctvlms.sh
+        run: find . -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n

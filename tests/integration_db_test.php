@@ -4,6 +4,7 @@ require_once __DIR__ . '/../config/database.php';
 require_once __DIR__ . '/../includes/audit.php';
 require_once __DIR__ . '/../includes/discovery.php';
 require_once __DIR__ . '/../includes/exposure.php';
+require_once __DIR__ . '/../includes/package_advisories.php';
 
 $tests = 0;
 function dbcheck(bool $ok, string $message): void {
@@ -75,5 +76,44 @@ dbcheck($windows['confirmed'] === 1, 'Windows platform satisfies compound applic
 $status = $db->query("SELECT status FROM exposure_matches WHERE assetID={$assetID} AND vulnID={$vulnID}")->fetchColumn();
 dbcheck($status === 'Confirmed', 'Not_Affected exposure can reopen when evidence changes');
 dbcheck((int)$db->query("SELECT COUNT(*) FROM asset_vulnerabilities WHERE assetID={$assetID} AND vulnID={$vulnID}")->fetchColumn() === 1, 'Confirmed exposure enters lifecycle');
+
+// Authoritative package identity -> distro advisory -> explainable package exposure.
+$db->prepare("INSERT INTO asset_facts (assetID,factKey,factValue,source,confidence) VALUES (:asset,'os_id','debian','Local',1) ON DUPLICATE KEY UPDATE factValue='debian'")->execute([':asset'=>$assetID]);
+$db->prepare("INSERT INTO asset_facts (assetID,factKey,factValue,source,confidence) VALUES (:asset,'distribution_suite','bullseye','Local',1) ON DUPLICATE KEY UPDATE factValue='bullseye'")->execute([':asset'=>$assetID]);
+$software = $db->prepare("INSERT INTO asset_software (assetID,product,version,packageManager,packageName,source,isActive) VALUES (:asset,'jq','1.5+dfsg-1','apt','jq','Agent',1)");
+$software->execute([':asset'=>$assetID]); $softwareID = (int)$db->lastInsertId();
+$package = $db->prepare("INSERT INTO asset_package_inventory (softwareID,assetID,binaryPackage,binaryVersion,architecture,sourcePackage,sourceVersion,upstreamSourceVersion,packageManager,inventorySource,identityAuthoritative,isActive) VALUES (:software,:asset,'jq','1.5+dfsg-1','amd64','jq','1.5+dfsg-1','1.5','apt','Local_dpkg',1,1)");
+$package->execute([':software'=>$softwareID,':asset'=>$assetID]);
+$sync = ingestDistributionAdvisories($db, new DebianSecurityTrackerProvider(), __DIR__ . '/fixtures/debian_tracker.json');
+dbcheck($sync['processed'] === 6, 'fixture advisory records ingested transactionally');
+$packageResult = evaluatePackageAdvisories($db, $assetID);
+dbcheck($packageResult['packages_evaluated'] === 1 && $packageResult['confirmed'] === 2, 'package advisory engine evaluates fixed and open rules');
+dbcheck($packageResult['not_affected'] === 2 && $packageResult['unknown'] === 1, 'package advisory states remain tri-state');
+$coverage = $packageResult['coverage'];
+dbcheck($coverage['packages_discovered'] === 1 && $coverage['packages_with_source_identity'] === 1 && $coverage['packages_evaluated'] === 1, 'package coverage reports discovery, identity, and evaluation separately');
+dbcheck($coverage['packages_with_advisory_coverage'] === 1 && $coverage['confirmed_vulnerable'] === 1, 'package coverage reports advisory coverage and confirmed package');
+$evidenceJson = $db->query("SELECT evidence FROM exposure_matches WHERE softwareID={$softwareID} AND matchType='Package_Advisory' AND status='Confirmed' ORDER BY exposureID LIMIT 1")->fetchColumn();
+$packageEvidence = json_decode((string)$evidenceJson, true);
+dbcheck($packageEvidence['binary_package'] === 'jq' && $packageEvidence['source_package'] === 'jq', 'package exposure evidence includes binary/source identity');
+dbcheck($packageEvidence['provider'] === 'DebianSecurityTracker' && isset($packageEvidence['comparison_result']), 'package exposure evidence includes provider and comparison');
+$db->prepare("INSERT INTO asset_patch_policies (assetID,mode,requireVerifiedBackup,transport) VALUES (:asset,'Approval',0,'None')")->execute([':asset'=>$assetID]);
+$db->prepare('UPDATE asset_package_inventory SET identityAuthoritative=0 WHERE softwareID=:software')->execute([':software'=>$softwareID]);
+dbcheck(queueEligibleRemediationJobs($db, $assetID) === 0, 'non-authoritative package identity cannot queue remediation');
+$db->prepare('UPDATE asset_package_inventory SET identityAuthoritative=1 WHERE softwareID=:software')->execute([':software'=>$softwareID]);
+
+// Kali packages may correlate to Debian source records, but never inherit a
+// definitive Debian result without an explicit provenance mapping.
+$db->prepare("INSERT INTO assets (assetName,assetType,ipAddress,osPlatform) VALUES ('kali-fixture','Workstation','192.0.2.11','Kali Rolling')")->execute();
+$kaliAsset = (int)$db->lastInsertId();
+foreach (['os_id'=>'kali','distribution_suite'=>'kali-rolling'] as $key=>$value) {
+    $db->prepare("INSERT INTO asset_facts (assetID,factKey,factValue,source,confidence) VALUES (:asset,:key,:value,'Local',1)")->execute([':asset'=>$kaliAsset,':key'=>$key,':value'=>$value]);
+}
+$db->prepare("INSERT INTO asset_software (assetID,product,version,packageManager,packageName,source,isActive) VALUES (:asset,'jq','1.7-1+kali1','apt','jq','Agent',1)")->execute([':asset'=>$kaliAsset]);
+$kaliSoftware = (int)$db->lastInsertId();
+$db->prepare("INSERT INTO asset_package_inventory (softwareID,assetID,binaryPackage,binaryVersion,architecture,sourcePackage,sourceVersion,upstreamSourceVersion,packageManager,inventorySource,identityAuthoritative,isActive) VALUES (:software,:asset,'jq','1.7-1+kali1','amd64','jq','1.7-1+kali1','1.7','apt','Local_dpkg',1,1)")->execute([':software'=>$kaliSoftware,':asset'=>$kaliAsset]);
+$kaliResult = evaluatePackageAdvisories($db, $kaliAsset);
+dbcheck($kaliResult['confirmed'] === 0 && $kaliResult['not_affected'] === 0 && $kaliResult['unknown'] > 0, 'Kali divergence only produces Potential package exposures');
+$db->prepare("INSERT INTO asset_patch_policies (assetID,mode,requireVerifiedBackup,transport) VALUES (:asset,'Approval',0,'None')")->execute([':asset'=>$kaliAsset]);
+dbcheck(queueEligibleRemediationJobs($db, $kaliAsset) === 0, 'Potential and Unknown package exposures never queue remediation');
 
 echo "PASS: {$tests} database integration tests\n";

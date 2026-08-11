@@ -1,18 +1,19 @@
 -- =====================================================================
 -- CTVLMS — Seed Data
 -- Realistic cybersecurity data for demo / course presentation
--- All passwords: Admin@123 (bcrypt hashed)
+-- Demo users are inactive foreign-key anchors and have no usable password.
+-- Create an administrator explicitly with bin/create-admin.php.
 -- =====================================================================
 
 USE ctvlms;
 
 -- ----- 1. USERS (one per role) -----
 INSERT INTO users (fullName, email, passwordHash, role, isActive) VALUES
-('Sarah Chen',       'admin@ctvlms.local',        '$2y$12$iXyJMgrWtrmWAvDNvyL0EeLl4IgkDvdgtcIYW1FMTf58FSMzCQ4N2', 'Admin',        TRUE),
-('Marcus Williams',  'soc.analyst@ctvlms.local',  '$2y$12$iXyJMgrWtrmWAvDNvyL0EeLl4IgkDvdgtcIYW1FMTf58FSMzCQ4N2', 'SOC_Analyst',  TRUE),
-('Alex Rivera',      'red.teamer@ctvlms.local',   '$2y$12$iXyJMgrWtrmWAvDNvyL0EeLl4IgkDvdgtcIYW1FMTf58FSMzCQ4N2', 'Red_Teamer',   TRUE),
-('Priya Patel',      'vuln.manager@ctvlms.local', '$2y$12$iXyJMgrWtrmWAvDNvyL0EeLl4IgkDvdgtcIYW1FMTf58FSMzCQ4N2', 'Vuln_Manager', TRUE),
-('Jordan Blake',     'viewer@ctvlms.local',       '$2y$12$iXyJMgrWtrmWAvDNvyL0EeLl4IgkDvdgtcIYW1FMTf58FSMzCQ4N2', 'Viewer',       TRUE);
+('Sarah Chen',       'admin@ctvlms.local',        '!disabled-demo-account!', 'Admin',        FALSE),
+('Marcus Williams',  'soc.analyst@ctvlms.local',  '!disabled-demo-account!', 'SOC_Analyst',  FALSE),
+('Alex Rivera',      'red.teamer@ctvlms.local',   '!disabled-demo-account!', 'Red_Teamer',   FALSE),
+('Priya Patel',      'vuln.manager@ctvlms.local', '!disabled-demo-account!', 'Vuln_Manager', FALSE),
+('Jordan Blake',     'viewer@ctvlms.local',       '!disabled-demo-account!', 'Viewer',       FALSE);
 
 -- ----- 2. ASSETS (10 mixed types) -----
 INSERT INTO assets (assetName, assetType, ipAddress, osPlatform, ownerUserID, criticality, environment) VALUES
