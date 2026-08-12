@@ -3,6 +3,14 @@ USE ctvlms;
 -- CTVLMS v3.3: authenticated remote inventory is deliberately separated from
 -- patch/remediation credentials so read-only collection can follow least privilege.
 
+-- A package is one active managed identity per asset/architecture/manager.
+-- inventorySource records the latest authoritative collector rather than creating
+-- duplicate package identities when an endpoint moves between Local and SSH collection.
+ALTER TABLE asset_package_inventory
+    DROP INDEX uq_package_inventory_identity,
+    ADD UNIQUE KEY uq_package_inventory_identity
+        (assetID, binaryPackage, architecture, packageManager);
+
 CREATE TABLE IF NOT EXISTS asset_inventory_policies (
     assetID INT PRIMARY KEY,
     mode ENUM('Disabled','SSH') NOT NULL DEFAULT 'Disabled',
