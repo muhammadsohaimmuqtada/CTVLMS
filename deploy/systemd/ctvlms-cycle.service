@@ -10,8 +10,29 @@ Group=ctvlms
 WorkingDirectory=/opt/ctvlms
 EnvironmentFile=/etc/ctvlms/ctvlms.env
 ExecStart=/usr/bin/php /opt/ctvlms/bin/continuous-cycle.php
+
+# A full feed refresh or bounded patch operation can legitimately exceed the
+# system manager's default oneshot start timeout. The application imposes its
+# own per-child bounds and MariaDB overlap lock; this caps the whole cycle.
+TimeoutStartSec=3h
+KillMode=control-group
+UMask=0077
+
 NoNewPrivileges=true
 PrivateTmp=true
+PrivateDevices=true
 ProtectSystem=strict
-ProtectHome=read-only
-ReadWritePaths=/var/log/ctvlms
+ProtectHome=true
+ProtectControlGroups=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadOnlyPaths=/etc/ctvlms
+ReadWritePaths=-/var/log/ctvlms
