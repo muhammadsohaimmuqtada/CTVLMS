@@ -52,6 +52,7 @@ jobs:
           php tests/nvd_parser_test.php
           php tests/remediation_policy_test.php
           php tests/remediation_queue_test.php
+          php tests/scheduler_test.php
       - name: Database schema and migrations
         env:
           MYSQL_PWD: ci-root-password
@@ -63,7 +64,8 @@ jobs:
           for migration in \
             database/migrations/007_package_candidate_separation.sql \
             database/migrations/008_remote_inventory.sql \
-            database/migrations/009_remediation_leases.sql; do
+            database/migrations/009_remediation_leases.sql \
+            database/migrations/010_cycle_operations.sql; do
             mariadb -h 127.0.0.1 -uroot ctvlms < "$migration"
           done
       - name: Database integration tests
@@ -73,6 +75,7 @@ jobs:
           php tests/remote_inventory_db_test.php
           php tests/remediation_lease_db_test.php
           php tests/remediation_verification_db_test.php
+          php tests/scheduler_db_test.php
       - name: Python syntax
         run: python3 -m py_compile test_app.py negative_tests.py
       - name: Shell syntax
