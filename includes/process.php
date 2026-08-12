@@ -26,6 +26,7 @@ function runBoundedProcess(
     $started = microtime(true);
     $nextHeartbeat = $started + $heartbeatIntervalSeconds;
     $timedOut = false; $outputExceeded = false;
+    $observedExit = null;
 
     try {
         while (true) {
@@ -43,7 +44,10 @@ function runBoundedProcess(
             }
 
             $status = proc_get_status($process);
-            if (!($status['running'] ?? false)) break;
+            if (!($status['running'] ?? false)) {
+                if (isset($status['exitcode']) && (int)$status['exitcode'] >= 0) $observedExit = (int)$status['exitcode'];
+                break;
+            }
 
             $now = microtime(true);
             if ($heartbeat !== null && $now >= $nextHeartbeat) {
@@ -70,6 +74,7 @@ function runBoundedProcess(
     }
 
     $exit = proc_close($process);
+    if ($exit < 0 && $observedExit !== null) $exit = $observedExit;
     if ($timedOut) $exit = 124;
     if ($outputExceeded) $exit = 125;
     return [
