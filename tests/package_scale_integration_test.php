@@ -48,7 +48,7 @@ $advisory = $db->prepare(
     "INSERT INTO distribution_advisories
         (recordKey,advisoryIdentifier,cveID,distribution,suite,sourcePackage,state,fixedVersion,
          sourceUrl,dataSourceIdentifier,provider,providerRecordJson)
-     VALUES (:key,:cve,:cve,'debian','sid','scale-pkg','Fixed','2.0-1',
+     VALUES (:key,:advisory,:cve,'debian','sid','scale-pkg','Fixed','2.0-1',
              'https://security-tracker.debian.org/tracker/data/json','scale-fixture','DebianSecurityTracker','{}')"
 );
 $db->beginTransaction();
@@ -56,7 +56,7 @@ try {
     for ($i=0; $i<1000; $i++) {
         $cve = sprintf('CVE-2097-%04d', $i + 1000);
         $vuln->execute([':cve'=>$cve,':title'=>$cve . ' scale candidate']);
-        $advisory->execute([':key'=>hash('sha256','scale|' . $cve),':cve'=>$cve]);
+        $advisory->execute([':key'=>hash('sha256','scale|' . $cve),':advisory'=>$cve,':cve'=>$cve]);
     }
     $db->commit();
 } catch (Throwable $e) {
@@ -109,9 +109,9 @@ $db->prepare(
     "INSERT INTO distribution_advisories
         (recordKey,advisoryIdentifier,cveID,distribution,suite,sourcePackage,state,fixedVersion,
          sourceUrl,dataSourceIdentifier,provider,providerRecordJson)
-     VALUES (:key,:cve,:cve,'debian','sid','native-v2-pkg','Fixed','2.0-1',
+     VALUES (:key,:advisory,:cve,'debian','sid','native-v2-pkg','Fixed','2.0-1',
              'https://security-tracker.debian.org/tracker/data/json','native-fixture','DebianSecurityTracker','{}')"
-)->execute([':key'=>hash('sha256','native|' . $cve),':cve'=>$cve]);
+)->execute([':key'=>hash('sha256','native|' . $cve),':advisory'=>$cve,':cve'=>$cve]);
 $native = evaluatePackageAdvisoriesV2($db,$debianAsset);
 scalecheck($native['materialized_advisory_findings'] === 1 && $native['confirmed'] === 1,
     'native Debian advisory remains a materialized confirmed finding');
