@@ -76,6 +76,7 @@ jobs:
           php tests/remediation_lease_db_test.php
           php tests/remediation_verification_db_test.php
           php tests/scheduler_db_test.php
+          php tests/health_db_test.php
       - name: Python syntax
         run: python3 -m py_compile test_app.py negative_tests.py
       - name: Shell syntax
