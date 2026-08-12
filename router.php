@@ -9,6 +9,12 @@ if (str_contains($path, "\0") || str_contains($path, '..')) {
     http_response_code(400);
     exit('Bad Request');
 }
+if ($path === '/healthz') {
+    require_once __DIR__ . '/config/config.php';
+    require_once __DIR__ . '/config/database.php';
+    require_once __DIR__ . '/includes/health.php';
+    emitCtvLmsHealth(getDB());
+}
 if (str_starts_with($path, '/public/')) {
     $file = __DIR__ . $path;
     if (is_file($file)) return false;
