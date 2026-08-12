@@ -175,6 +175,13 @@ function claimRemediationJob(PDO $db, ?string $workerID = null, ?int $leaseSecon
     }
 }
 
+function remediationLeaseIsOwned(PDO $db, int $jobID, string $token): bool
+{
+    $stmt=$db->prepare("SELECT 1 FROM remediation_jobs WHERE jobID=:id AND status='Running' AND leaseToken=:token LIMIT 1");
+    $stmt->execute([':id'=>$jobID,':token'=>$token]);
+    return (bool)$stmt->fetchColumn();
+}
+
 function heartbeatRemediationLease(PDO $db, int $jobID, string $token, ?int $leaseSeconds = null): void
 {
     $leaseSeconds ??= remediationLeaseSeconds();
@@ -185,7 +192,9 @@ function heartbeatRemediationLease(PDO $db, int $jobID, string $token, ?int $lea
          WHERE jobID=:id AND status='Running' AND leaseToken=:token"
     );
     $stmt->execute([':id'=>$jobID,':token'=>$token]);
-    if ($stmt->rowCount()!==1) throw new RuntimeException('Remediation lease lost; fenced worker must stop.');
+    if ($stmt->rowCount()===0 && !remediationLeaseIsOwned($db,$jobID,$token)) {
+        throw new RuntimeException('Remediation lease lost; fenced worker must stop.');
+    }
 }
 
 function fencedJobUpdate(PDO $db, int $jobID, string $token, string $sqlSet, array $params = []): void
