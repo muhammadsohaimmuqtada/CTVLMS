@@ -14,6 +14,7 @@ require_once __DIR__ . '/../config/database.php';
 require_once __DIR__ . '/../includes/audit.php';
 require_once __DIR__ . '/../includes/sync_cve.php';
 require_once __DIR__ . '/../includes/exposure.php';
+require_once __DIR__ . '/../includes/package_engine_v2.php';
 
 function runChild(array $command): array
 {
@@ -64,7 +65,7 @@ foreach ($targets as $target) {
 }
 
 $summary['correlation'] = evaluateExposureInventory($db);
-$summary['package_correlation'] = evaluatePackageAdvisories($db);
+$summary['package_correlation'] = evaluatePackageAdvisoriesV2($db);
 $summary['jobs_queued'] = queueEligibleRemediationJobs($db);
 
 if (getenv('CTVLMS_EXECUTE_PATCHES') === '1') {
