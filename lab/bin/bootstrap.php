@@ -12,6 +12,7 @@ $assets = [
     ['name'=>'ctvlms-lab-general','ip'=>'172.28.77.12', 'mode'=>'Approval'],
     ['name'=>'ctvlms-lab-stale',  'ip'=>'172.28.77.13', 'mode'=>'Auto'],
     ['name'=>'ctvlms-lab-failure','ip'=>'172.28.77.14', 'mode'=>'Auto'],
+    ['name'=>'ctvlms-lab-cancel', 'ip'=>'172.28.77.15', 'mode'=>'Auto'],
 ];
 
 $db->beginTransaction();
