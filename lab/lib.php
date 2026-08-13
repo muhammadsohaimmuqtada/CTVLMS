@@ -24,7 +24,10 @@ function ctvlmsLabAssetMap(PDO $db): array
 {
     $rows = $db->query(
         "SELECT assetID,assetName,ipAddress FROM assets
-         WHERE assetName IN ('ctvlms-lab-canary','ctvlms-lab-general','ctvlms-lab-stale','ctvlms-lab-failure')"
+         WHERE assetName IN (
+            'ctvlms-lab-canary','ctvlms-lab-general','ctvlms-lab-stale',
+            'ctvlms-lab-failure','ctvlms-lab-cancel'
+         )"
     )->fetchAll();
     $out = [];
     foreach ($rows as $row) $out[(string)$row['assetName']] = $row;
