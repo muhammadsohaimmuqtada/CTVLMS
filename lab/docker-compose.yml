@@ -80,6 +80,19 @@ services:
       pilot:
         ipv4_address: 172.28.77.14
 
+  target-cancel:
+    build:
+      context: ./target
+    environment:
+      CTVLMS_LAB_REPO_URL: http://172.28.77.5:8080
+    volumes:
+      - ./.state/id_ed25519.pub:/run/ctvlms-lab/id_ed25519.pub:ro
+    depends_on:
+      - apt-repo
+    networks:
+      pilot:
+        ipv4_address: 172.28.77.15
+
 networks:
   pilot:
     driver: bridge
