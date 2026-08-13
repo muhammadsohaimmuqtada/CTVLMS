@@ -21,6 +21,8 @@ services:
       - ./database/migrations/008_remote_inventory.sql:/docker-entrypoint-initdb.d/08-remote-inventory.sql:ro
       - ./database/migrations/009_remediation_leases.sql:/docker-entrypoint-initdb.d/09-remediation-leases.sql:ro
       - ./database/migrations/010_cycle_operations.sql:/docker-entrypoint-initdb.d/10-cycle-operations.sql:ro
+      - ./database/migrations/011_remediation_rollouts.sql:/docker-entrypoint-initdb.d/11-remediation-rollouts.sql:ro
+      - ./database/migrations/012_remediation_state_reconciliation.sql:/docker-entrypoint-initdb.d/12-remediation-state-reconciliation.sql:ro
     healthcheck:
       test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
       interval: 10s
