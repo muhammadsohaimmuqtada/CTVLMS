@@ -1,5 +1,6 @@
 <?php
 /** Post-remediation verification requiring evidence newer than patch completion. */
+require_once __DIR__ . '/audit.php';
 require_once __DIR__ . '/exposure.php';
 require_once __DIR__ . '/package_engine_v2.php';
 
