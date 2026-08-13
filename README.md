@@ -1,141 +1,259 @@
 # CTVLMS — Continuous Threat & Vulnerability Lifecycle Management
 
-CTVLMS is an open-source exposure-management platform under active development. It combines authorised asset discovery, managed endpoint inventory, NVD vulnerability intelligence, evidence-backed applicability evaluation, vulnerability lifecycle management, policy-gated remediation, and post-remediation verification.
+CTVLMS is an open-source exposure-management and policy-gated remediation platform for authorised infrastructure. It combines network discovery, authenticated endpoint inventory, vulnerability intelligence, explainable applicability analysis, remediation workflow, worker recovery, staged rollout controls, and fresh post-patch verification.
 
-> CTVLMS is not yet an independently audited enterprise security product. Keep automatic remediation disabled until your inventory, backups, SSH trust, change controls, and rollback procedures have been validated in a lab/staging environment.
+> **Current maturity:** suitable for controlled design-partner / on-prem pilot evaluation. CTVLMS is not yet an independently audited enterprise security product. Keep automatic remediation disabled outside a validated staging environment until inventory, SSH trust, backups, change controls, maintenance windows, canary policy, and rollback procedures have been proven for the deployment.
 
-## Pipeline
+## Why CTVLMS exists
+
+A CVE in a catalogue does **not** mean an asset is vulnerable. CTVLMS is built around evidence and lifecycle state rather than blind CVE matching:
 
 ```text
-NVD CVE/CPE configuration ── Nmap/service and CPE inventory
-                │                         │
-                └──── existing CPE applicability engine
-
-Distribution advisory ── source package/version ── OS suite facts
-                │                         │
-                └──── package applicability engine
-
-Both engines produce explainable Confirmed / Not Affected / Potential
-                  ↓
-Policy + backup + approval gates
-                  ↓
-Package-specific remediation
-                  ↓
-Fresh post-patch verification
-                  ↓
-Verified Closed
+Authorised discovery ── Managed endpoint inventory
+         │                         │
+         ├──── service/CPE data    ├──── OS + package/source identity
+         │                         │
+         └────────────┬────────────┘
+                      │
+           Vulnerability intelligence
+              NVD + distro advisories
+                      │
+             Applicability engines
+                      │
+       Confirmed / Potential / Not Affected
+                      │
+          Policy + backup + approval gates
+                      │
+              Remediation queue
+                      │
+       Worker lease + rollout blast-radius gate
+                      │
+             Package-specific patch
+                      │
+              Fresh managed inventory
+                      │
+                Verified Closed
 ```
 
-## Reliability principles
+## Current capabilities
 
-- A CVE in the catalogue does not imply an asset is affected.
-- CTVLMS preserves NVD `AND` / `OR` / `NEGATE` configuration structure instead of flattening compound applicability into a blind match.
-- Nmap CPE URI bindings (`cpe:/...`) and NVD CPE 2.3 strings are both normalized.
-- Service-banner versions are not substituted for a different component version embedded in a CPE.
-- Missing OS evidence remains `Potential`; authoritative platform conflicts can resolve applicability to `Not Affected`.
-- Debian package versions are ordered by `dpkg --compare-versions`, including epochs, revisions, `~`, and distribution suffixes.
-- Package advisories are correlated by authoritative source-package identity; package names are never converted into invented CPEs.
-- A Debian advisory for a Kali-modified package remains `Potential` unless an explicit, justified distribution mapping exists.
-- Network services are retired only from explicit closed-port evidence. Filtered/unseen ports are not treated as proof that a service disappeared.
-- Automatic remediation is package-specific and policy-gated; it is not a general-purpose remote shell.
-- `Verified Closed` requires fresh post-remediation evidence.
+### Discovery and inventory
 
-## Core components
+- authorised Nmap service discovery with explicit target validation;
+- conservative service freshness: closed ports retire services, filtered/unseen ports do not;
+- local managed Linux inventory;
+- authenticated remote SSH inventory for explicitly managed assets;
+- authoritative OS, architecture, kernel, binary package, source package, source version, and upstream-version evidence;
+- package identities remain separate from CPEs rather than inventing package CPE mappings;
+- inventory runs and freshness are persisted for verification and operations.
 
-- PHP web portal with RBAC, CSRF protection, session hardening, audit logging, and lifecycle controls
-- MariaDB/MySQL relational model
-- NVD CVE/CPE synchronisation
-- Nmap authorised network discovery
-- Managed endpoint facts and Linux `dpkg` package inventory
-- Streamed Debian Security Tracker JSON ingestion with explicit provider provenance
-- A separate distribution-package applicability engine and package coverage metrics
-- Exposure intelligence with evidence payloads and tri-state compound applicability
-- Patch policies, backup gates, remediation jobs, and verification
-- Incidents, threat actors, IOCs, engagements, findings, and reporting
+### Vulnerability intelligence
 
-## Production-style quick start
+- NVD incremental synchronisation;
+- targeted exact-CVE refresh;
+- legacy NVD configuration backfill;
+- preservation of full NVD configuration trees;
+- CPE 2.3 and legacy Nmap `cpe:/...` normalisation;
+- Debian Security Tracker structured JSON ingestion;
+- advisory snapshot provenance and feed-shrink protection;
+- distribution-mapping model for trusted cross-distribution relationships;
+- package candidate intelligence separated from materialised authoritative findings.
 
-Requirements: PHP 8+, PDO MySQL, SimpleXML, MariaDB/MySQL, Nmap, OpenSSH client, and Docker Compose if using the provided database container.
+### Applicability
+
+- tri-state `AND` / `OR` / `NEGATE` NVD configuration evaluation;
+- platform-aware applicability using authoritative endpoint evidence;
+- service versions are not substituted for a different component version embedded in a CPE;
+- Debian package ordering uses `dpkg --compare-versions` rather than PHP semantic-version logic;
+- source-package + distro-suite package applicability;
+- unsupported cross-distribution matches remain candidate/unknown rather than generating hundreds of thousands of false findings;
+- explainable JSON evidence for correlation decisions.
+
+### Remediation safety
+
+- automatic execution defaults **off**;
+- package-specific remediation only; no general-purpose remote shell;
+- package-name validation and fixed command policy;
+- Approval and Auto modes;
+- verified-backup gate;
+- strict SSH host-key verification;
+- separate inventory and patch SSH identities/policies;
+- maintenance windows and timezone-aware execution;
+- worker leases, heartbeats, fencing, expired-lease recovery, bounded retries, and failure classification;
+- stale evaluated-version fence: the worker refuses to patch when the live package version no longer matches the version used to create the job;
+- staged/canary rollout groups, deterministic canary buckets, concurrency limits, explicit promotion, pause state, and automatic pause after rollout failures.
+
+### Verification and operations
+
+- patch command success alone does not close a finding;
+- package remediation requires a managed inventory run newer than patch completion;
+- fresh applicability must resolve to Not Affected before `Verified_Closed`;
+- continuous-cycle overlap protection and run history;
+- minimal database-backed `/healthz` readiness endpoint;
+- Nginx + PHP-FPM production deployment baseline;
+- production preflight validation;
+- atomic MariaDB backup with gzip integrity + SHA-256 sidecar;
+- guarded restore workflow;
+- systemd timers for continuous cycles and backups.
+
+## Safety model
+
+CTVLMS prefers an explainable unknown over an unjustified remediation decision.
+
+- `Potential` / unknown applicability never becomes automatic patch eligibility.
+- Cross-distribution advisory candidates are not authoritative findings without native provider evidence or an explicit trusted mapping.
+- A worker losing its lease is fenced from committing state.
+- A successful remote command does not rewrite authoritative inventory.
+- Closure requires evidence newer than remediation completion.
+- Auto remediation must be explicitly enabled by the operator.
+
+## Requirements
+
+Core runtime:
+
+- PHP 8+
+- PDO MySQL
+- SimpleXML
+- MariaDB/MySQL
+- Nmap
+- OpenSSH client
+
+Production deployment additionally expects Nginx + PHP-FPM. Docker Compose is used by the provided database and pilot-lab workflows.
+
+## Local development start
 
 ```bash
 cp .env.example .env
 cp config/config.example.php config/config.php
 ```
 
-Set strong, distinct values in `.env` for:
-
-```text
-CTVLMS_DB_ROOT_PASSWORD
-CTVLMS_DB_PASSWORD
-```
-
-A fresh default Docker database is intentionally **empty of demo business data**:
+Set strong, distinct database secrets, then:
 
 ```bash
 docker compose up -d
-```
-
-Create the first administrator interactively:
-
-```bash
 php bin/create-admin.php admin@example.com "CTVLMS Administrator"
-```
-
-Start the local portal:
-
-```bash
 ./ctvlms.sh
 ```
 
-The development router serves application traffic through `index.php` and static content only from `public/`; SQL, configuration, tests, and repository internals are not direct static resources.
+The PHP built-in server is for development only. Production deployment uses the Nginx/PHP-FPM profile described in [`docs/production-deployment.md`](docs/production-deployment.md).
 
-### Explicit demo mode
+## Database upgrades
 
-Demo/course fixtures are opt-in:
+Apply every numbered migration in order. Current `main` includes migrations through:
 
-```bash
-docker compose -f docker-compose.yml -f docker-compose.demo.yml up -d
+```text
+004 inventory applicability
+005 NVD sync state
+006 package intelligence
+007 package candidate separation
+008 remote inventory
+009 remediation leases
+010 cycle operations
+011 remediation rollouts
 ```
 
-Fixture users are inactive and have no usable password. Run `bin/create-admin.php` to create a login after starting demo mode. Never use demo data in a shared deployment.
-
-## Existing database upgrade
-
-Apply every migration in numeric order. Current deployments additionally require migration `006`:
+For an existing database:
 
 ```bash
-mariadb -u root -p ctvlms < database/migrations/004_inventory_applicability.sql
-mariadb -u root -p ctvlms < database/migrations/005_nvd_sync_state.sql
-mariadb -u root -p ctvlms < database/migrations/006_package_intelligence.sql
+for migration in database/migrations/*.sql; do
+  mariadb -u root -p ctvlms < "$migration"
+done
 ```
 
-Migration `004` adds inventory freshness, authoritative asset facts/platform CPEs, and storage for full NVD configuration trees. Migration `005` records NVD configuration refresh state. Migration `006` adds normalized binary/source package identity, distribution advisories and sync provenance, package evaluation state, correlation indexes, and the package-advisory exposure type. It is idempotent and does not reset existing data.
-
-After upgrading an existing database, backfill old CVE rows in bounded batches:
+Then backfill historical NVD configuration state in bounded batches:
 
 ```bash
 php includes/sync_cve.php --backfill-missing 100
 ```
 
-Repeat until `remaining_unknown` is `0`. For a specific CVE that must be refreshed immediately:
+Repeat until `remaining_unknown` is `0`.
 
-```bash
-php includes/sync_cve.php --cve CVE-2026-3087
-```
+## Inventory
 
-## Managed endpoint inventory
-
-Network discovery and endpoint inventory have deliberately different trust levels. Nmap is used for remotely observed network evidence; endpoint inventory is used for authoritative OS/package facts.
-
-For the machine running CTVLMS, after its asset exists:
+Local endpoint:
 
 ```bash
 php bin/inventory-local.php <asset-id>
 ```
 
-This records hostname, distribution/suite, OS family/name/version, architecture, kernel, platform CPE evidence, and installed `dpkg` packages when available. The collector uses native `dpkg-query` fields for binary package/version, architecture, source package/version, and upstream source version. Those values live in `asset_package_inventory`; compatibility rows remain in `asset_software`, with `cpe=NULL` rather than a fabricated package CPE. Every identity records its package manager, inventory source, authoritative flag, freshness, and active state.
+Managed SSH endpoint:
 
-The continuous cycle can refresh selected local assets before correlation:
+```bash
+php bin/inventory-ssh.php <asset-id>
+```
+
+SSH inventory requires an enabled `asset_inventory_policies` record and key/known-hosts paths supplied through the referenced environment variables.
+
+## Vulnerability intelligence
+
+NVD maintenance:
+
+```bash
+export NVD_SYNC_HOURS=24
+php includes/sync_cve.php
+```
+
+Exact CVE refresh:
+
+```bash
+php includes/sync_cve.php --cve CVE-2026-3087
+```
+
+Debian package advisory snapshot:
+
+```bash
+php bin/sync-package-advisories.php
+```
+
+Package coverage:
+
+```bash
+php bin/package-coverage.php
+php bin/package-coverage.php <asset-id>
+```
+
+Coverage distinguishes candidate advisories from authoritative advisory coverage.
+
+## Authorised network discovery
+
+```bash
+php bin/scan-network.php 192.168.1.0/24
+```
+
+Scan only systems you own or are authorised to assess.
+
+## Remediation
+
+Keep execution disabled during deployment validation:
+
+```bash
+export CTVLMS_EXECUTE_PATCHES=0
+```
+
+The queue is created from Confirmed eligible exposures and per-asset policy. The worker executes at most one claim at a time:
+
+```bash
+php bin/patch-worker.php
+```
+
+After a successful patch, refresh managed inventory and verify:
+
+```bash
+php bin/inventory-ssh.php <asset-id>
+php bin/verify-remediations.php
+```
+
+Rollout groups can be controlled with:
+
+```bash
+php bin/rollout-control.php
+```
+
+See [`docs/remediation-rollouts.md`](docs/remediation-rollouts.md) for staged/canary behavior.
+
+## Continuous cycle
+
+Example controlled cycle:
 
 ```bash
 export CTVLMS_LOCAL_ASSET_IDS='1'
@@ -144,139 +262,92 @@ export CTVLMS_EXECUTE_PATCHES=0
 php bin/continuous-cycle.php
 ```
 
-## NVD intelligence
+Child operations are bounded by timeouts, cycle overlap is prevented, and cycle results are recorded for operations.
 
-Incremental maintenance uses recently modified CVEs:
+## Production deployment
 
-```bash
-export NVD_SYNC_HOURS=24
-php includes/sync_cve.php
-```
+Use the production baseline in [`docs/production-deployment.md`](docs/production-deployment.md):
 
-Refresh one or more known CVEs directly:
+- dedicated `ctvlms` service identity;
+- Nginx TLS termination and front-controller boundary;
+- dedicated PHP-FPM pool;
+- non-root application DB user;
+- external runtime secret environment;
+- production preflight;
+- minimal readiness endpoint;
+- systemd cycle and backup timers;
+- backup/restore procedure.
 
-```bash
-php includes/sync_cve.php --cve CVE-2026-3087 CVE-2026-0001
-```
+## Release-candidate pilot lab
 
-Backfill legacy rows whose full configuration state has not yet been populated:
+The repository includes an isolated deterministic 4-node Debian acceptance lab. It uses a synthetic local package and advisory to prove the real CTVLMS remediation machinery without touching the host package manager or relying on an intentionally vulnerable public package.
 
-```bash
-php includes/sync_cve.php --backfill-missing 100
-```
-
-An NVD API key is recommended for sustained use:
-
-```bash
-export NVD_API_KEY='...'
-```
-
-CTVLMS stores both flattened CPE criteria for candidate indexing and the original NVD configuration JSON for compound applicability evaluation. Each refreshed vulnerability is also marked `Present` or `None` for NVD configuration state; untouched legacy rows remain `Unknown` until refreshed.
-
-## Distribution package intelligence
-
-Distribution intelligence is provider-based. The initial `DebianSecurityTrackerProvider` consumes Debian Security Tracker's structured JSON snapshot and streams one source-package object at a time, avoiding HTML scraping and unbounded whole-feed decoding. Ingestion is transactional, records the provider/source URL and sync run, and removes records absent from a successfully ingested replacement snapshot.
-
-Sync the current Debian snapshot:
+Run:
 
 ```bash
-php bin/sync-package-advisories.php
+bash lab/bin/full-run.sh
 ```
 
-For an offline mirror or deterministic fixture:
+It validates:
 
-```bash
-php bin/sync-package-advisories.php --file /path/to/debian-tracker.json
-```
+- remote SSH inventory;
+- source-package applicability;
+- backup/policy gates;
+- canary patch success;
+- Approval-mode execution;
+- worker lease reclamation;
+- stale-version refusal;
+- rollout auto-pause after patch failure;
+- fresh post-patch closure;
+- backup + destructive restore on the isolated lab DB.
 
-HTTP access uses HTTPS, bounded response size, timeouts, and retries. A failed fetch or parse leaves the previously committed advisory snapshot intact. The provider interface can ingest future Kali-native records using `distribution=kali` without changing the core evaluation algorithm.
+See [`lab/README.md`](lab/README.md).
 
-Debian Tracker data is source-package and suite specific, but it does not prove that a Kali rebuild has identical patch provenance. Therefore Debian-to-Kali candidates are retained as `Potential` with a `kali_debian_mapping_unjustified` reason. They are never promoted to Confirmed/Not Affected and never become remediation eligible merely because their version string resembles Debian's.
+## Testing and CI
 
-### Package coverage semantics
+Pure policy/parser tests and MariaDB integration tests run in GitHub Actions. CI also validates:
 
-Package coverage is independent of Nmap/NVD CPE coverage. Read global counts or scope them to one asset:
+- all PHP syntax;
+- all numbered migrations and migration reapplication where required;
+- package-scale behavior;
+- remote inventory;
+- remediation leasing and verification;
+- rollout controls;
+- production preflight;
+- Nginx configuration syntax;
+- shell and Python syntax;
+- pilot-lab Compose/build contract.
 
-```bash
-php bin/package-coverage.php
-php bin/package-coverage.php 7
-```
+## Commercial support boundary today
 
-The JSON reports packages discovered, packages with source identity, packages evaluated, packages with advisory coverage, confirmed-vulnerable packages, fixed/not-affected packages, and unknown/unmapped packages. `packages_evaluated` is based on explicit evaluation-state rows, not the presence of a handful of CPE-bearing components. Thus an endpoint with 5,000 packages and four CPE matches cannot appear fully covered.
+A credible first design-partner scope is a controlled on-prem Debian/Linux deployment with authenticated SSH inventory and Approval-mode remediation. Generic NVD/CPE service correlation can cover additional Linux software, but native package-remediation authority should be limited to distributions/providers with explicit evidence.
 
-Package evidence records binary/source identity, installed binary/source versions, CVE/advisory, endpoint and advisory distribution/suite, fixed version, dpkg comparison result, provider, and decision reason. `Potential` represents unknown applicability; it is not a vulnerability confirmation.
+Not yet claimed as complete enterprise capability:
 
-### Two complementary finding sources
-
-- NVD/CPE findings describe product/platform applicability from Nmap services, explicit software CPEs, and NVD configuration trees. This engine is unchanged and continues to use its existing CPE version logic.
-- Distribution-package findings describe installed source packages using the endpoint's authoritative distro/suite and the distro provider's fixed/status rules. They do not require or create CPEs.
-
-## Authorised network discovery
-
-```bash
-php bin/scan-network.php 192.168.1.0/24
-```
-
-Targets must be valid IP/CIDR values and are passed to Nmap as a process argument array, not interpolated through a shell. Scan only systems you own or are authorised to assess.
-
-## Remediation safety
-
-Automatic execution defaults off:
-
-```bash
-export CTVLMS_EXECUTE_PATCHES=0
-```
-
-Supported package managers are currently `apt`, `dnf`, `yum`, and `apk`. Execution requires a Confirmed software exposure, validated authoritative package identity for package-advisory findings, an asset patch policy, approval or Auto policy as configured, SSH transport, strict host-key verification, and backup evidence when policy requires it. `Potential`/Unknown package findings cannot queue jobs. `CTVLMS_EXECUTE_PATCHES` remains off unless an operator explicitly sets it to `1`.
-
-```bash
-php bin/patch-worker.php
-php bin/verify-remediations.php
-```
-
-Use restricted patching accounts and narrowly scoped non-interactive `sudo` rules. Test rollback and maintenance-window procedures before enabling Auto mode.
-
-## Testing
-
-Local pure-policy/parser tests:
-
-```bash
-php tests/v2_policy_test.php
-php tests/inventory_test.php
-php tests/package_intelligence_test.php
-php tests/nvd_parser_test.php
-php tests/remediation_policy_test.php
-```
-
-GitHub Actions additionally boots MariaDB, applies every numbered migration, and executes database integration tests covering service freshness, compound CPE applicability, and inventory → advisory → package exposure/evidence correlation. Unit fixtures require no network.
+- Kali-native package advisory authority;
+- Ubuntu/RHEL/Rocky/Alma native package providers;
+- Windows/macOS remediation;
+- SaaS/MSP tenant isolation and billing;
+- SAML/OIDC enterprise SSO;
+- HA database/reference deployment;
+- broad SIEM/ticketing integrations;
+- EPSS / CISA KEV prioritisation;
+- independent external security audit and penetration test.
 
 ## Security boundaries
 
-- PDO prepared statements and disabled emulated prepares
-- server-side RBAC
-- CSRF validation for state-changing web actions
-- `password_hash()` / `password_verify()`
-- strict session mode, HttpOnly cookies, SameSite Strict, Secure cookies when HTTPS is configured
-- audit trail for security/lifecycle actions
-- risk acceptance restricted to Admin/Vulnerability Manager with justification
-- strict SSH host-key checking and key paths referenced through environment variables
-- default Docker application account separated from the database root account
-- demo seeding opt-in instead of production-default
-- bundled database administration UI is not part of the runtime product
+- PDO prepared statements with emulated prepares disabled;
+- server-side RBAC and CSRF validation;
+- `password_hash()` / `password_verify()`;
+- strict session mode, HttpOnly cookies, SameSite Strict, Secure cookies under HTTPS;
+- lifecycle/audit trail;
+- privileged risk acceptance with justification;
+- strict SSH host-key checking;
+- dedicated application DB identity;
+- no bundled database admin UI;
+- no production-default demo credentials;
+- only the front controller, public static assets, and minimal health endpoint are web reachable in the production Nginx profile.
 
-## Current limitations / roadmap
+## Project status
 
-CTVLMS is materially stronger than the original academic v2 foundation, but these remain production-readiness work rather than hidden assumptions:
-
-- remote managed-inventory collector/agent with signed identity and secure enrollment
-- a Kali-native advisory provider and explicit Debian/Kali provenance mappings
-- distribution providers beyond Debian/Kali and richer binary-to-source mappings outside `dpkg`
-- EPSS and CISA KEV prioritisation
-- multi-tenancy and tenant isolation for MSP/SaaS deployment
-- job leasing/recovery for interrupted remediation workers
-- staged/canary patch waves and tested rollback orchestration
-- reverse-proxy/TLS production deployment profile and secret-manager integration
-- SIEM/ticketing integrations, metrics/health endpoints, and operational SLOs
-- independent security review and deployment hardening
-
-The product should prefer an explainable `Potential` over a destructive false-positive remediation, and should prefer stale/unknown inventory over an unjustified false-negative closure.
+CTVLMS has moved beyond the original academic prototype into a controlled pilot-stage security platform. The next proof point is repeated successful release-candidate lab runs followed by a small real design-partner fleet under Approval mode, not feature-count expansion.

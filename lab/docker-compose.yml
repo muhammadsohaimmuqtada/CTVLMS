@@ -1,0 +1,88 @@
+name: ctvlms-pilot-lab
+
+services:
+  db:
+    image: mariadb:11
+    environment:
+      MARIADB_ROOT_PASSWORD: ctvlms-lab-root-2026
+      MARIADB_DATABASE: ctvlms
+      MARIADB_USER: ctvlms_lab_app
+      MARIADB_PASSWORD: ctvlms-lab-app-password-2026
+    ports:
+      - "127.0.0.1:33306:3306"
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    networks:
+      pilot:
+        ipv4_address: 172.28.77.2
+
+  apt-repo:
+    build:
+      context: ./apt-repo
+    networks:
+      pilot:
+        ipv4_address: 172.28.77.5
+
+  target-canary:
+    build:
+      context: ./target
+    environment:
+      CTVLMS_LAB_REPO_URL: http://172.28.77.5:8080
+    volumes:
+      - ./.state/id_ed25519.pub:/run/ctvlms-lab/id_ed25519.pub:ro
+    depends_on:
+      - apt-repo
+    networks:
+      pilot:
+        ipv4_address: 172.28.77.11
+
+  target-general:
+    build:
+      context: ./target
+    environment:
+      CTVLMS_LAB_REPO_URL: http://172.28.77.5:8080
+    volumes:
+      - ./.state/id_ed25519.pub:/run/ctvlms-lab/id_ed25519.pub:ro
+    depends_on:
+      - apt-repo
+    networks:
+      pilot:
+        ipv4_address: 172.28.77.12
+
+  target-stale:
+    build:
+      context: ./target
+    environment:
+      CTVLMS_LAB_REPO_URL: http://172.28.77.5:8080
+    volumes:
+      - ./.state/id_ed25519.pub:/run/ctvlms-lab/id_ed25519.pub:ro
+    depends_on:
+      - apt-repo
+    networks:
+      pilot:
+        ipv4_address: 172.28.77.13
+
+  target-failure:
+    build:
+      context: ./target
+    environment:
+      # Deliberately unavailable repository. The endpoint remains inventory-able,
+      # but its patch attempt must fail and auto-pause its rollout group.
+      CTVLMS_LAB_REPO_URL: http://127.0.0.1:9
+    volumes:
+      - ./.state/id_ed25519.pub:/run/ctvlms-lab/id_ed25519.pub:ro
+    depends_on:
+      - apt-repo
+    networks:
+      pilot:
+        ipv4_address: 172.28.77.14
+
+networks:
+  pilot:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.77.0/24
