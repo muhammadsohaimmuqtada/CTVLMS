@@ -14,7 +14,7 @@ require_once __DIR__ . '/../lib.php';
 ctvlmsLabAssertIsolation();
 $db=getDB();
 $assets=ctvlmsLabAssetMap($db);
-foreach (['ctvlms-lab-canary','ctvlms-lab-general','ctvlms-lab-stale','ctvlms-lab-failure'] as $name) {
+foreach (['ctvlms-lab-canary','ctvlms-lab-general','ctvlms-lab-stale','ctvlms-lab-failure','ctvlms-lab-cancel'] as $name) {
     ctvlmsLabCheck(isset($assets[$name]),"bootstrap created {$name}");
 }
 
@@ -34,6 +34,11 @@ function labJob(PDO $db,int $assetID): array {
     $row=$stmt->fetch();
     if (!$row) throw new RuntimeException("No lab remediation job for asset {$assetID}");
     return $row;
+}
+function labExposureStatus(PDO $db,int $exposureID): string {
+    $stmt=$db->prepare('SELECT status FROM exposure_matches WHERE exposureID=:id');
+    $stmt->execute([':id'=>$exposureID]);
+    return (string)$stmt->fetchColumn();
 }
 function labReleaseJob(PDO $db,int $jobID,?string $status=null): void {
     if ($status!==null) {
@@ -56,7 +61,7 @@ function labDirectUpgrade(PDO $db,int $assetID): void {
     $stmt=$db->prepare("SELECT a.ipAddress,p.sshUser,p.sshKeyEnv,p.sshKnownHostsEnv FROM assets a JOIN asset_patch_policies p ON p.assetID=a.assetID WHERE a.assetID=:asset");
     $stmt->execute([':asset'=>$assetID]);
     $policy=$stmt->fetch();
-    if (!$policy) throw new RuntimeException('Missing patch policy for direct stale-inventory setup.');
+    if (!$policy) throw new RuntimeException('Missing patch policy for out-of-band change setup.');
     [, $upgrade]=packageCommands('apt','ctvlms-lab-pkg');
     $argv=buildStrictSshArgv(
         (string)$policy['ipAddress'],(string)$policy['sshUser'],
@@ -65,43 +70,50 @@ function labDirectUpgrade(PDO $db,int $assetID): void {
         $upgrade,5
     );
     $result=runBoundedProcess($argv,120,16777216);
-    ctvlmsLabCheck($result['exit']===0,'out-of-band package change succeeded for stale-inventory test');
+    ctvlmsLabCheck($result['exit']===0,'out-of-band package change succeeded');
 }
 
 $canary=labAssetID($assets,'ctvlms-lab-canary');
 $general=labAssetID($assets,'ctvlms-lab-general');
 $stale=labAssetID($assets,'ctvlms-lab-stale');
 $failure=labAssetID($assets,'ctvlms-lab-failure');
+$cancel=labAssetID($assets,'ctvlms-lab-cancel');
 
 fwrite(STDOUT,"\n== 1. Authoritative remote inventory ==\n");
-foreach ([$canary,$general,$stale,$failure] as $assetID) {
+foreach ([$canary,$general,$stale,$failure,$cancel] as $assetID) {
     labInventory($assetID,$root);
     ctvlmsLabCheck(labPackageVersion($db,$assetID)==='1.0',"asset {$assetID} starts on lab package 1.0");
 }
 
 fwrite(STDOUT,"\n== 2. Advisory applicability and queueing ==\n");
 $evaluation=evaluatePackageAdvisoriesV2($db);
-ctvlmsLabCheck((int)$evaluation['confirmed']===4,'native Debian lab advisory confirms exactly four affected endpoints');
-ctvlmsLabCheck((int)$evaluation['materialized_advisory_findings']===4,'exactly four authoritative package findings are materialized');
+ctvlmsLabCheck((int)$evaluation['confirmed']===5,'native Debian lab advisory confirms exactly five affected endpoints');
+ctvlmsLabCheck((int)$evaluation['materialized_advisory_findings']===5,'exactly five authoritative package findings are materialized');
 $queued=queueEligibleRemediationJobs($db);
-ctvlmsLabCheck($queued===4,'four remediation jobs created through normal policy gate');
+ctvlmsLabCheck($queued===5,'five remediation jobs created through normal policy gate');
 $db->exec("UPDATE remediation_jobs SET nextAttemptAt=DATE_ADD(CURRENT_TIMESTAMP,INTERVAL 1 DAY) WHERE packageName='ctvlms-lab-pkg' AND status IN ('Queued','Approved')");
 
 $canaryJob=labJob($db,$canary);
 $generalJob=labJob($db,$general);
 $staleJob=labJob($db,$stale);
 $failureJob=labJob($db,$failure);
+$cancelJob=labJob($db,$cancel);
 ctvlmsLabCheck($canaryJob['status']==='Queued','Auto canary job is queued');
 ctvlmsLabCheck($generalJob['status']==='Awaiting_Approval','approval-mode endpoint requires operator approval');
 
-fwrite(STDOUT,"\n== 3. Canary patch and fresh verification ==\n");
+fwrite(STDOUT,"\n== 3. Canary patch across the real two-cycle verification order ==\n");
 labReleaseJob($db,(int)$canaryJob['jobID']);
 labRunPatchWorker($root,true);
 $canaryJob=labJob($db,$canary);
 ctvlmsLabCheck($canaryJob['status']==='Succeeded','canary remediation job succeeded');
 labInventory($canary,$root);
 ctvlmsLabCheck(labPackageVersion($db,$canary)==='1.1','fresh inventory observes canary package 1.1');
+$canaryCorrelation=evaluatePackageAdvisoriesV2($db,$canary);
+ctvlmsLabCheck((int)$canaryCorrelation['not_affected']===1,'next-cycle correlation sees the patched canary as not affected');
+ctvlmsLabCheck(labExposureStatus($db,(int)$canaryJob['exposureID'])==='Remediated','correlation preserves Remediated until verification consumes fresh evidence');
 ctvlmsLabCheck(verifyRemediatedExposure($db,(int)$canaryJob['exposureID'])===true,'canary closes only after fresh post-patch inventory');
+evaluatePackageAdvisoriesV2($db,$canary);
+ctvlmsLabCheck(labExposureStatus($db,(int)$canaryJob['exposureID'])==='Verified_Closed','later correlation preserves Verified_Closed while evidence remains not affected');
 
 fwrite(STDOUT,"\n== 4. Approval + expired worker lease recovery ==\n");
 $db->exec("UPDATE remediation_rollout_groups SET phase='General',pausedReason=NULL WHERE groupName='ctvlms-lab-primary'");
@@ -114,12 +126,14 @@ $generalJob=labJob($db,$general);
 ctvlmsLabCheck($generalJob['status']==='Succeeded','expired lease was safely reclaimed and job completed');
 ctvlmsLabCheck((int)$generalJob['attemptCount']===2,'reclaimed job records both worker attempts');
 labInventory($general,$root);
+evaluatePackageAdvisoriesV2($db,$general);
+ctvlmsLabCheck(labExposureStatus($db,(int)$generalJob['exposureID'])==='Remediated','reclaimed remediation also survives correlation-before-verification ordering');
 ctvlmsLabCheck(verifyRemediatedExposure($db,(int)$generalJob['exposureID'])===true,'reclaimed remediation verifies closed from fresh inventory');
 
 fwrite(STDOUT,"\n== 5. Stale evaluated version fence ==\n");
 labDirectUpgrade($db,$stale);
 labReleaseJob($db,(int)$staleJob['jobID']);
-$staleResult=labRunPatchWorker($root,false);
+labRunPatchWorker($root,false);
 $staleJob=labJob($db,$stale);
 ctvlmsLabCheck($staleJob['status']==='Failed','stale remediation job is failed instead of patching blindly');
 ctvlmsLabCheck($staleJob['lastFailureClass']==='inventory_changed','stale job records inventory_changed failure class');
@@ -128,9 +142,20 @@ ctvlmsLabCheck(labPackageVersion($db,$stale)==='1.1','fresh inventory captures t
 $staleEval=evaluatePackageAdvisoriesV2($db,$stale);
 ctvlmsLabCheck((int)$staleEval['not_affected']===1,'fresh applicability resolves externally updated endpoint as not affected');
 
-fwrite(STDOUT,"\n== 6. Failed patch auto-pauses rollout ==\n");
+fwrite(STDOUT,"\n== 6. Applicability change cancels queued remediation ==\n");
+labDirectUpgrade($db,$cancel);
+labInventory($cancel,$root);
+ctvlmsLabCheck(labPackageVersion($db,$cancel)==='1.1','cancellation target fresh inventory observes external fixed version');
+$cancelEval=evaluatePackageAdvisoriesV2($db,$cancel);
+ctvlmsLabCheck((int)$cancelEval['not_affected']===1,'fresh correlation resolves queued target as not affected');
+$cancelJob=labJob($db,$cancel);
+ctvlmsLabCheck($cancelJob['status']==='Cancelled','queued remediation is cancelled instead of remaining stuck or patching unnecessarily');
+ctvlmsLabCheck($cancelJob['lastFailureClass']==='applicability_changed','cancelled job records applicability_changed reason');
+ctvlmsLabCheck($cancelJob['exposureStatus']==='Not_Affected','cancelled job keeps authoritative Not_Affected exposure state');
+
+fwrite(STDOUT,"\n== 7. Failed patch auto-pauses rollout ==\n");
 labReleaseJob($db,(int)$failureJob['jobID']);
-$failureResult=labRunPatchWorker($root,false);
+labRunPatchWorker($root,false);
 $failureJob=labJob($db,$failure);
 ctvlmsLabCheck($failureJob['status']==='Failed','unpatchable endpoint produces a failed remediation job');
 ctvlmsLabCheck(in_array($failureJob['lastFailureClass'],['upgrade_failed','no_version_change'],true),'failure is classified as a concrete patch failure');
