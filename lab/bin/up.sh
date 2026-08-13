@@ -6,7 +6,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 LAB="$ROOT/lab"
 STATE="$LAB/.state"
 COMPOSE=(docker compose -f "$LAB/docker-compose.yml")
-TARGETS=(172.28.77.11 172.28.77.12 172.28.77.13 172.28.77.14)
+TARGETS=(172.28.77.11 172.28.77.12 172.28.77.13 172.28.77.14 172.28.77.15)
 
 command -v docker >/dev/null || { echo "docker is required" >&2; exit 1; }
 command -v ssh-keygen >/dev/null || { echo "ssh-keygen is required" >&2; exit 1; }
