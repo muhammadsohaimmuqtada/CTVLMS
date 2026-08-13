@@ -33,6 +33,27 @@ BEGIN
 END$$
 DELIMITER ;
 
+-- If verified closure is contradicted, reopen the asset-level lifecycle too.
+-- Otherwise the exposure evidence and the operator lifecycle board can disagree.
+DROP TRIGGER IF EXISTS ctvlms_reopen_lifecycle_on_verification_failure;
+DELIMITER $$
+CREATE TRIGGER ctvlms_reopen_lifecycle_on_verification_failure
+AFTER UPDATE ON exposure_matches
+FOR EACH ROW
+BEGIN
+    IF OLD.status = 'Verified_Closed' AND NEW.status = 'Verification_Failed' THEN
+        UPDATE asset_vulnerabilities
+        SET status = 'Confirmed',
+            closedDate = NULL,
+            notes = CONCAT_WS('\n', NULLIF(notes,''),
+                'CTVLMS reopened this lifecycle record because fresh applicability evidence contradicted verified closure.')
+        WHERE assetID = NEW.assetID
+          AND vulnID = NEW.vulnID
+          AND status = 'Verified_Closed';
+    END IF;
+END$$
+DELIMITER ;
+
 -- If correlation resolves an exposure before execution, retire queued/approval
 -- work immediately. Running jobs retain lease ownership; the live-version fence
 -- remains responsible for refusing stale execution evidence.
