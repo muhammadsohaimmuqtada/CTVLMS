@@ -1,0 +1,11 @@
+[Unit]
+Description=Run CTVLMS distribution package advisory synchronization every 6 hours
+
+[Timer]
+OnBootSec=10m
+OnUnitActiveSec=6h
+Persistent=true
+RandomizedDelaySec=10m
+
+[Install]
+WantedBy=timers.target
