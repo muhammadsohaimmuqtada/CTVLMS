@@ -1,0 +1,1 @@
+Branch hardening status: scalable evaluator, candidate-only semantics, coverage split, snapshot preflight guard, regression tests, and hardened scheduled sync are implemented on this branch. Existing production entrypoints are retained until CI and real-host validation complete.
