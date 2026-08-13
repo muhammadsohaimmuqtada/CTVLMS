@@ -52,6 +52,7 @@ jobs:
           php tests/nvd_parser_test.php
           php tests/remediation_policy_test.php
           php tests/remediation_queue_test.php
+          php tests/remediation_rollout_test.php
           php tests/scheduler_test.php
       - name: Database schema and migrations
         env:
@@ -65,7 +66,8 @@ jobs:
             database/migrations/007_package_candidate_separation.sql \
             database/migrations/008_remote_inventory.sql \
             database/migrations/009_remediation_leases.sql \
-            database/migrations/010_cycle_operations.sql; do
+            database/migrations/010_cycle_operations.sql \
+            database/migrations/011_remediation_rollouts.sql; do
             mariadb -h 127.0.0.1 -uroot ctvlms < "$migration"
           done
       - name: Database integration tests
@@ -74,6 +76,7 @@ jobs:
           php tests/package_scale_integration_test.php
           php tests/remote_inventory_db_test.php
           php tests/remediation_lease_db_test.php
+          php tests/remediation_rollout_db_test.php
           php tests/remediation_verification_db_test.php
           php tests/scheduler_db_test.php
           php tests/health_db_test.php
