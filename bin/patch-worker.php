@@ -6,6 +6,7 @@ require_once __DIR__ . '/../config/database.php';
 require_once __DIR__ . '/../includes/audit.php';
 require_once __DIR__ . '/../includes/remediation.php';
 require_once __DIR__ . '/../includes/remediation_queue.php';
+require_once __DIR__ . '/../includes/remediation_rollout.php';
 require_once __DIR__ . '/../includes/ssh_transport.php';
 
 function runPatchSsh(PDO $db, array $job, string $remoteCommand, int $timeoutSeconds): array
@@ -27,6 +28,26 @@ function firstOutputLine(array $result): string
     return trim((string)($lines[0] ?? ''));
 }
 
+function recordRolloutOutcomeSafe(PDO $db, array $job, bool $success, string $details): void
+{
+    try {
+        $outcome=recordRemediationRolloutOutcome($db,$job,$success,$details);
+        if (!empty($outcome['auto_paused'])) {
+            logAction(
+                'ROLLOUT_AUTO_PAUSED','remediation_rollout_groups',(int)$outcome['group_id'],
+                'Rollout group auto-paused after remediation failure on job #'.(int)$job['jobID']
+            );
+        }
+    } catch (Throwable $error) {
+        // Rollout telemetry must never rewrite the already-determined patch
+        // outcome. Surface it separately for operators.
+        logAction(
+            'ROLLOUT_EVENT_FAILED','remediation_jobs',(int)$job['jobID'],
+            'Unable to record rollout outcome: '.$error->getMessage()
+        );
+    }
+}
+
 $db=getDB();
 try {
     $job=claimRemediationJob($db);
@@ -37,6 +58,29 @@ try {
 if ($job===null) {
     echo "No executable remediation jobs in the current policy/maintenance window.\n";
     exit(0);
+}
+
+try {
+    $rolloutDecision=remediationRolloutDecision($db,$job);
+    if (!$rolloutDecision['allowed']) {
+        deferClaimForRemediationRollout($db,$job,$rolloutDecision);
+        $group=$rolloutDecision['group'] ?? null;
+        logAction(
+            'PATCH_ROLLOUT_DEFERRED','remediation_jobs',(int)$job['jobID'],
+            'Deferred by rollout policy: '.$rolloutDecision['reason'].
+            ($group ? '; group='.(string)$group['groupName'] : '')
+        );
+        echo "Patch job #{$job['jobID']} deferred by remediation rollout policy: {$rolloutDecision['reason']}.\n";
+        exit(0);
+    }
+} catch (Throwable $error) {
+    // A rollout-control failure is a policy failure: never fall through and
+    // execute the patch when blast-radius policy cannot be evaluated.
+    try {
+        failOrRetryRemediationJob($db,$job,'Unable to evaluate remediation rollout policy: '.$error->getMessage(),'rollout_policy_error',false);
+    } catch (Throwable) {}
+    fwrite(STDERR,'Remediation rollout policy evaluation failed: '.$error->getMessage().PHP_EOL);
+    exit(1);
 }
 
 logAction('PATCH_CLAIMED','remediation_jobs',(int)$job['jobID'],
@@ -76,9 +120,11 @@ try {
     $upgrade=runPatchSsh($db,$job,$upgradeCommand,max(60,(int)$job['patchCommandTimeoutSeconds']));
     if ($upgrade['exit']!==0) {
         $unknown=($upgrade['exit']===255 || !empty($upgrade['timed_out']));
+        $failureClass=$unknown?'execution_outcome_unknown':'upgrade_failed';
         $message='Package upgrade failed'.($unknown?' with unknown remote execution outcome':'').': '.
             (trim((string)$upgrade['stderr']) ?: trim((string)$upgrade['stdout']) ?: 'unknown error');
-        failOrRetryRemediationJob($db,$job,$message,$unknown?'execution_outcome_unknown':'upgrade_failed',false);
+        failOrRetryRemediationJob($db,$job,$message,$failureClass,false);
+        recordRolloutOutcomeSafe($db,$job,false,$failureClass.': '.$message);
         logAction('PATCH_FAILED','remediation_jobs',(int)$job['jobID'],$message);
         fwrite(STDERR,"Patch job #{$job['jobID']} failed: {$message}\n");
         exit(1);
@@ -89,6 +135,7 @@ try {
     if ($after['exit']!==0 || firstOutputLine($after)==='') {
         $message='Upgrade command returned success but post-upgrade version could not be verified; fresh inventory required.';
         failOrRetryRemediationJob($db,$job,$message,'execution_outcome_unknown',false);
+        recordRolloutOutcomeSafe($db,$job,false,'execution_outcome_unknown: '.$message);
         logAction('PATCH_VERIFY_TRANSPORT_FAILED','remediation_jobs',(int)$job['jobID'],$message);
         fwrite(STDERR,"Patch job #{$job['jobID']} requires re-evaluation: {$message}\n");
         exit(1);
@@ -97,6 +144,7 @@ try {
     if ($beforeVersion===$afterVersion) {
         $message='Upgrade command completed but installed package version did not change.';
         failOrRetryRemediationJob($db,$job,$message,'no_version_change',false);
+        recordRolloutOutcomeSafe($db,$job,false,'no_version_change: '.$message);
         logAction('PATCH_FAILED','remediation_jobs',(int)$job['jobID'],$message);
         fwrite(STDERR,"Patch job #{$job['jobID']} failed: {$message}\n");
         exit(1);
@@ -142,13 +190,15 @@ try {
         if ($db->inTransaction()) $db->rollBack();
         throw $error;
     }
+    recordRolloutOutcomeSafe($db,$job,true,"Succeeded: {$job['packageName']} {$beforeVersion} -> {$afterVersion}");
     echo "Patched job #{$job['jobID']}: {$job['packageName']} {$beforeVersion} -> {$afterVersion}; awaiting fresh managed inventory.\n";
 } catch (Throwable $error) {
     if ($db->inTransaction()) $db->rollBack();
     // If the failure occurred outside one of the explicitly handled paths, fence
     // the state transition. Policy/credential errors are not blindly retried.
     try {
-        $result=failOrRetryRemediationJob($db,$job,$error->getMessage(),'worker_error',false);
+        failOrRetryRemediationJob($db,$job,$error->getMessage(),'worker_error',false);
+        recordRolloutOutcomeSafe($db,$job,false,'worker_error: '.$error->getMessage());
     } catch (Throwable $leaseError) {
         fwrite(STDERR,'Worker lost remediation lease while handling failure: '.$leaseError->getMessage().PHP_EOL);
         exit(1);
