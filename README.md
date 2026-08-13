@@ -81,13 +81,16 @@ Authorised discovery ── Managed endpoint inventory
 - maintenance windows and timezone-aware execution;
 - worker leases, heartbeats, fencing, expired-lease recovery, bounded retries, and failure classification;
 - stale evaluated-version fence: the worker refuses to patch when the live package version no longer matches the version used to create the job;
-- staged/canary rollout groups, deterministic canary buckets, concurrency limits, explicit promotion, pause state, and automatic pause after rollout failures.
+- staged/canary rollout groups, deterministic canary buckets, concurrency limits, explicit promotion, pause state, and automatic pause after rollout failures;
+- queued/approval remediation is cancelled when fresh authoritative applicability becomes `Not_Affected`, rather than remaining stuck or executing an unnecessary patch.
 
 ### Verification and operations
 
 - patch command success alone does not close a finding;
 - package remediation requires a managed inventory run newer than patch completion;
 - fresh applicability must resolve to Not Affected before `Verified_Closed`;
+- correlation cannot overwrite `Remediated`/`Verification_Failed` before the verification workflow consumes fresh evidence;
+- stable Not Affected evidence preserves `Verified_Closed`; contradictory fresh evidence reopens the exposure as `Verification_Failed` and reopens the asset lifecycle;
 - continuous-cycle overlap protection and run history;
 - minimal database-backed `/healthz` readiness endpoint;
 - Nginx + PHP-FPM production deployment baseline;
@@ -150,6 +153,7 @@ Apply every numbered migration in order. Current `main` includes migrations thro
 009 remediation leases
 010 cycle operations
 011 remediation rollouts
+012 remediation/correlation state reconciliation
 ```
 
 For an existing database:
@@ -262,7 +266,7 @@ export CTVLMS_EXECUTE_PATCHES=0
 php bin/continuous-cycle.php
 ```
 
-Child operations are bounded by timeouts, cycle overlap is prevented, and cycle results are recorded for operations.
+Child operations are bounded by timeouts, cycle overlap is prevented, and cycle results are recorded for operations. On the cycle after a patch, fresh inventory and correlation may run before verification; the remediation state guard intentionally preserves verification-owned exposure state so `verify-remediations.php` can close or reopen the finding correctly.
 
 ## Production deployment
 
@@ -280,7 +284,7 @@ Use the production baseline in [`docs/production-deployment.md`](docs/production
 
 ## Release-candidate pilot lab
 
-The repository includes an isolated deterministic 4-node Debian acceptance lab. It uses a synthetic local package and advisory to prove the real CTVLMS remediation machinery without touching the host package manager or relying on an intentionally vulnerable public package.
+The repository includes an isolated deterministic **5-node Debian** acceptance lab. It uses a synthetic local package and advisory to prove the real CTVLMS remediation machinery without touching the host package manager or relying on an intentionally vulnerable public package.
 
 Run:
 
@@ -294,14 +298,18 @@ It validates:
 - source-package applicability;
 - backup/policy gates;
 - canary patch success;
+- real next-cycle inventory → correlation → verification ordering;
+- preservation of `Remediated` until fresh evidence is verified;
+- preservation/reopening semantics for `Verified_Closed`;
 - Approval-mode execution;
 - worker lease reclamation;
 - stale-version refusal;
+- automatic cancellation of queued work after applicability changes;
 - rollout auto-pause after patch failure;
 - fresh post-patch closure;
 - backup + destructive restore on the isolated lab DB.
 
-See [`lab/README.md`](lab/README.md).
+The lab CVE is synthetic and lab-only; it is not a real vulnerability claim. See [`lab/README.md`](lab/README.md).
 
 ## Testing and CI
 
@@ -312,11 +320,12 @@ Pure policy/parser tests and MariaDB integration tests run in GitHub Actions. CI
 - package-scale behavior;
 - remote inventory;
 - remediation leasing and verification;
+- remediation/correlation state ownership and obsolete-job cancellation;
 - rollout controls;
 - production preflight;
 - Nginx configuration syntax;
 - shell and Python syntax;
-- pilot-lab Compose/build contract.
+- the full five-node end-to-end pilot lab after the normal validation job succeeds.
 
 ## Commercial support boundary today
 
