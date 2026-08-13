@@ -23,8 +23,8 @@ try {
     $db->exec("DELETE FROM distribution_advisories WHERE provider='CTVLMSPilotLab'");
 
     $insertAsset = $db->prepare(
-        "INSERT INTO assets (assetName,assetType,ipAddress,osPlatform,riskLevel,environment)
-         VALUES (:name,'Server',:ip,'Debian 12','Low','Test')"
+        "INSERT INTO assets (assetName,assetType,ipAddress,osPlatform,environment)
+         VALUES (:name,'Server',:ip,'Debian 12','Test')"
     );
     $inventoryPolicy = $db->prepare(
         "INSERT INTO asset_inventory_policies
@@ -61,7 +61,6 @@ try {
          VALUES ('CVE-2099-7701','CTVLMS pilot-lab package upgrade fixture',
                  'Synthetic lab-only advisory used to prove end-to-end remediation.',7.5,'High',CURDATE())"
     )->execute();
-    $vulnID=(int)$db->lastInsertId();
 
     $db->prepare(
         "INSERT INTO distribution_advisory_sync_runs
