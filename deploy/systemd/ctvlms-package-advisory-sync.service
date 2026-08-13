@@ -1,0 +1,16 @@
+[Unit]
+Description=CTVLMS distribution package advisory synchronization
+After=network-online.target mariadb.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/ctvlms
+ExecStart=/usr/bin/php /opt/ctvlms/bin/sync-package-advisories-v2.php
+User=ctvlms
+Group=ctvlms
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/tmp
