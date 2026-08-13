@@ -37,7 +37,7 @@ jobs:
       - name: Install runtime dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y php-mysql php-xml mariadb-client openssh-client
+          sudo apt-get install -y php-mysql php-xml mariadb-client openssh-client nginx openssl
           cp config/config.example.php config/config.php
       - name: PHP syntax
         run: |
@@ -54,6 +54,7 @@ jobs:
           php tests/remediation_queue_test.php
           php tests/remediation_rollout_test.php
           php tests/scheduler_test.php
+          php tests/production_test.php
       - name: Database schema and migrations
         env:
           MYSQL_PWD: ci-root-password
@@ -80,6 +81,21 @@ jobs:
           php tests/remediation_verification_db_test.php
           php tests/scheduler_db_test.php
           php tests/health_db_test.php
+      - name: Production Nginx syntax
+        run: |
+          sudo mkdir -p /etc/letsencrypt/live/ctvlms.example.com
+          sudo openssl req -x509 -nodes -newkey rsa:2048 -days 1 \
+            -subj '/CN=ctvlms.example.com' \
+            -keyout /etc/letsencrypt/live/ctvlms.example.com/privkey.pem \
+            -out /etc/letsencrypt/live/ctvlms.example.com/fullchain.pem
+          cat > /tmp/ctvlms-nginx.conf <<EOF
+          events {}
+          http {
+              include /etc/nginx/mime.types;
+              include $GITHUB_WORKSPACE/deploy/nginx/ctvlms.conf.example;
+          }
+          EOF
+          sudo nginx -t -c /tmp/ctvlms-nginx.conf
       - name: Python syntax
         run: python3 -m py_compile test_app.py negative_tests.py
       - name: Shell syntax
