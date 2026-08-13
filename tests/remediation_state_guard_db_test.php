@@ -16,6 +16,7 @@ $vulnID=(int)$db->lastInsertId();
 $db->prepare("INSERT INTO asset_software (assetID,product,version,packageManager,packageName,source,isActive) VALUES (:asset,'state-pkg','1.0','apt','state-pkg','Agent',1)")->execute([':asset'=>$assetID]);
 $softwareID=(int)$db->lastInsertId();
 $db->prepare("INSERT INTO asset_vulnerabilities (assetID,vulnID,status,discoveredDate) VALUES (:asset,:vuln,'Remediated',CURDATE())")->execute([':asset'=>$assetID,':vuln'=>$vulnID]);
+$assetVulnID=(int)$db->lastInsertId();
 
 $key=hash('sha256','state-guard-fixture');
 $db->prepare(
@@ -28,13 +29,18 @@ $db->prepare("UPDATE exposure_matches SET status='Not_Affected' WHERE exposureID
 statedbcheck($db->query("SELECT status FROM exposure_matches WHERE exposureID={$exposureID}")->fetchColumn()==='Remediated', 'correlation cannot erase Remediated before verification');
 
 $db->prepare("UPDATE exposure_matches SET status='Verified_Closed' WHERE exposureID=:id")->execute([':id'=>$exposureID]);
+$db->prepare("UPDATE asset_vulnerabilities SET status='Verified_Closed',closedDate=CURDATE() WHERE assetVulnID=:id")->execute([':id'=>$assetVulnID]);
 statedbcheck($db->query("SELECT status FROM exposure_matches WHERE exposureID={$exposureID}")->fetchColumn()==='Verified_Closed', 'verification may transition Remediated to Verified_Closed');
 
 $db->prepare("UPDATE exposure_matches SET status='Not_Affected' WHERE exposureID=:id")->execute([':id'=>$exposureID]);
 statedbcheck($db->query("SELECT status FROM exposure_matches WHERE exposureID={$exposureID}")->fetchColumn()==='Verified_Closed', 'stable Not_Affected evidence preserves Verified_Closed');
+statedbcheck($db->query("SELECT status FROM asset_vulnerabilities WHERE assetVulnID={$assetVulnID}")->fetchColumn()==='Verified_Closed', 'stable evidence keeps lifecycle closed');
 
 $db->prepare("UPDATE exposure_matches SET status='Confirmed' WHERE exposureID=:id")->execute([':id'=>$exposureID]);
 statedbcheck($db->query("SELECT status FROM exposure_matches WHERE exposureID={$exposureID}")->fetchColumn()==='Verification_Failed', 'contradictory evidence reopens Verified_Closed as Verification_Failed');
+$lifecycle=$db->query("SELECT status,closedDate,notes FROM asset_vulnerabilities WHERE assetVulnID={$assetVulnID}")->fetch();
+statedbcheck($lifecycle['status']==='Confirmed' && $lifecycle['closedDate']===null, 'contradictory evidence reopens asset lifecycle and clears closed date');
+statedbcheck(str_contains((string)$lifecycle['notes'],'contradicted verified closure'), 'lifecycle reopen records an operator-readable reason');
 
 $db->prepare("UPDATE exposure_matches SET status='Remediation_Queued' WHERE exposureID=:id")->execute([':id'=>$exposureID]);
 $db->prepare(
