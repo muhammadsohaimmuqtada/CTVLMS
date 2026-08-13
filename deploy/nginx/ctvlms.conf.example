@@ -28,7 +28,7 @@ server {
     client_max_body_size 2m;
 
     location = /healthz {
-        include fastcgi_params;
+        include /etc/nginx/fastcgi_params;
         fastcgi_param SCRIPT_FILENAME /opt/ctvlms/public/healthz.php;
         fastcgi_param HTTPS on;
         fastcgi_pass unix:/run/php/php8.4-fpm-ctvlms.sock;
@@ -46,7 +46,7 @@ server {
     }
 
     location = /index.php {
-        include fastcgi_params;
+        include /etc/nginx/fastcgi_params;
         fastcgi_param SCRIPT_FILENAME /opt/ctvlms/index.php;
         fastcgi_param HTTPS on;
         fastcgi_param HTTP_PROXY "";
