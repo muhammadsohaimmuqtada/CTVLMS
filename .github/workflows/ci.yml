@@ -2,7 +2,7 @@ name: CTVLMS CI
 
 on:
   push:
-    branches: [main, 'agent/**', 'rc/**']
+    branches: [main, 'agent/**', 'rc/**', 'staging/**']
   pull_request:
 
 permissions:
@@ -55,6 +55,7 @@ jobs:
           php tests/remediation_rollout_test.php
           php tests/scheduler_test.php
           php tests/production_test.php
+          php tests/staging_test.php
       - name: Database schema and migrations
         env:
           MYSQL_PWD: ci-root-password
@@ -83,6 +84,7 @@ jobs:
           php tests/remediation_state_guard_db_test.php
           php tests/scheduler_db_test.php
           php tests/health_db_test.php
+          php tests/staging_db_test.php
       - name: Production Nginx syntax
         run: |
           sudo mkdir -p /etc/letsencrypt/live/ctvlms.example.com
